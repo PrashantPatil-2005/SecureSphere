@@ -1,0 +1,124 @@
+# =============================================================================
+# SecuriSphere - Multi-Layer Cybersecurity Monitoring Lab
+# Docker Compose Configuration
+# =============================================================================
+# This file sets up a local security lab with:
+#   - victim:   Intentionally vulnerable FastAPI application
+#   - attacker: Kali Linux with security testing tools
+#   - zeek:     Network traffic analyzer for baseline/anomaly detection
+# =============================================================================
+
+version: '3.8'
+
+networks:
+  labnet:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+volumes:
+  zeek_logs:
+    driver: local
+  victim_data:
+    driver: local
+
+services:
+  # ===========================================================================
+  # VICTIM SERVICE
+  # Intentionally vulnerable FastAPI application for security testing
+  # ===========================================================================
+  victim:
+    build:
+      context: ./victim
+      dockerfile: Dockerfile
+    container_name: securisphere-victim
+    hostname: victim
+    networks:
+      labnet:
+        ipv4_address: 172.28.0.10
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./victim/app:/app
+      - victim_data:/data
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DEBUG=true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # ===========================================================================
+  # ATTACKER SERVICE
+  # Kali Linux with pre-installed security testing tools
+  # ===========================================================================
+  attacker:
+    image: kalilinux/kali-rolling
+    container_name: securisphere-attacker
+    hostname: attacker
+    networks:
+      labnet:
+        ipv4_address: 172.28.0.20
+    privileged: true
+    stdin_open: true
+    tty: true
+    volumes:
+      - ./attacker/scripts:/scripts
+      - ./attacker/wordlists:/wordlists
+    command: >
+      bash -c "
+        echo '[*] Installing security tools...' &&
+        apt-get update &&
+        apt-get install -y --no-install-recommends \
+          nmap \
+          hydra \
+          curl \
+          wget \
+          nikto \
+          dirb \
+          net-tools \
+          iputils-ping \
+          dnsutils &&
+        echo '[*] Tools installed. Attacker container ready.' &&
+        tail -f /dev/null
+      "
+    depends_on:
+      - victim
+    restart: unless-stopped
+
+  # ===========================================================================
+  # ZEEK SERVICE
+  # Network traffic analyzer - captures and logs network metadata
+  # ===========================================================================
+  zeek:
+    image: blacktop/zeek:latest
+    container_name: securisphere-zeek
+    hostname: zeek
+    networks:
+      labnet:
+        ipv4_address: 172.28.0.30
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    volumes:
+      - zeek_logs:/logs
+      - ./zeek/config:/usr/local/zeek/share/zeek/site
+    environment:
+      - INTERFACE=eth0
+    command: >
+      bash -c "
+        echo '[*] Starting Zeek network monitoring...' &&
+        mkdir -p /logs &&
+        cd /logs &&
+        zeek -i eth0 local &&
+        tail -f /dev/null
+      "
+    depends_on:
+      - victim
+    restart: unless-stopped
