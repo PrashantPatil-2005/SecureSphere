@@ -4,8 +4,9 @@
 # Generates traffic for Zeek baseline anomaly detection
 # =============================================================================
 
-VICTIM_HOST="victim"
-VICTIM_PORT="8000"
+# Load environment variables (with defaults)
+VICTIM_HOST="${VICTIM_HOST:-victim}"
+VICTIM_PORT="${VICTIM_PORT:-8000}"
 
 echo "============================================="
 echo "SecuriSphere - Brute Force Attack Simulation"

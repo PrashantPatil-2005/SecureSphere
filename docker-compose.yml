@@ -72,6 +72,14 @@ services:
     volumes:
       - ./attacker/scripts:/scripts
       - ./attacker/wordlists:/wordlists
+    environment:
+      - VICTIM_IP=${VICTIM_IP:-172.28.0.10}
+      - VICTIM_HOST=${VICTIM_HOST:-victim}
+      - VICTIM_PORT=${VICTIM_PORT:-8000}
+      - TEST_ADMIN_USER=${TEST_ADMIN_USER:-admin}
+      - TEST_ADMIN_PASS=${TEST_ADMIN_PASS:-admin123}
+      - TEST_BACKDOOR_USER=${TEST_BACKDOOR_USER:-backdoor}
+      - TEST_BACKDOOR_PASS=${TEST_BACKDOOR_PASS:-letmein}
     command: >
       bash -c "
         echo '[*] Installing security tools...' &&
