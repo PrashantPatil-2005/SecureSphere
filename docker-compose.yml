@@ -22,6 +22,8 @@ volumes:
     driver: local
   victim_data:
     driver: local
+  analyzer_output:
+    driver: local
 
 services:
   # ===========================================================================
@@ -47,7 +49,7 @@ services:
       - DEBUG=true
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -121,4 +123,35 @@ services:
       "
     depends_on:
       - victim
+    restart: unless-stopped
+
+  # ===========================================================================
+  # ANALYZER SERVICE
+  # Anomaly detection engine - processes Zeek logs to detect threats
+  # ===========================================================================
+  analyzer:
+    build:
+      context: ./analyzer
+      dockerfile: Dockerfile
+    container_name: securisphere-analyzer
+    hostname: analyzer
+    networks:
+      labnet:
+        ipv4_address: 172.28.0.40
+    volumes:
+      - zeek_logs:/logs:ro
+      - analyzer_output:/analyzer/output
+      - ./analyzer/src:/analyzer/src
+    environment:
+      - PYTHONUNBUFFERED=1
+      - LOG_DIR=/logs
+      - OUTPUT_DIR=/analyzer/output
+    command: >
+      bash -c "
+        echo '[*] SecuriSphere Analyzer starting...' &&
+        sleep 30 &&
+        python -m src.cli --log-dir /logs --output-dir /analyzer/output watch --interval 60
+      "
+    depends_on:
+      - zeek
     restart: unless-stopped
