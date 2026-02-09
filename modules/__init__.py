@@ -10,5 +10,6 @@ Available modules:
 
 from . import network
 from . import password
+from . import api
 
-__all__ = ["network", "password"]
+__all__ = ["network", "password", "api"]
