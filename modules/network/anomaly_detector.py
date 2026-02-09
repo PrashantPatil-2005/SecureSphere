@@ -16,6 +16,16 @@ Features:
 - Anomaly detection with JSON alert output
 - CLI interface with --log-path and --mode arguments
 
+Simulation (from attacker container):
+    # Generate network traffic for baseline
+    nmap -sS victim-app
+    curl http://victim-app:8000/
+    
+    # Generate anomalous traffic
+    nmap -sS -p- victim-app              # Port scan (high connection rate)
+    hping3 --flood victim-app            # Flood attack (anomalous volume)
+    curl http://victim-app:8000/$(python -c "print('A'*10000)")  # Large request
+
 Usage:
     # Collect baseline from normal traffic
     python anomaly_detector.py --log-path /logs/conn.log --mode collect
@@ -26,22 +36,27 @@ Usage:
 
 import argparse
 import json
-import pickle
 import logging
+import pickle
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import LabelEncoder
 
-# Configure logging
+# =============================================================================
+# Logging Configuration
+# =============================================================================
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
 )
 logger = logging.getLogger(__name__)
 
@@ -51,36 +66,39 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 # Zeek conn.log standard column names
-CONN_LOG_COLUMNS = [
+CONN_LOG_COLUMNS: List[str] = [
     "ts", "uid", "id.orig_h", "id.orig_p", "id.resp_h", "id.resp_p",
     "proto", "service", "duration", "orig_bytes", "resp_bytes",
     "conn_state", "local_orig", "local_resp", "missed_bytes", "history",
     "orig_pkts", "orig_ip_bytes", "resp_pkts", "resp_ip_bytes", "tunnel_parents"
 ]
 
-# Features used for anomaly detection
-DETECTION_FEATURES = ["duration", "orig_bytes", "resp_bytes", "proto_encoded", "conn_state_encoded"]
+# Features used for anomaly detection model
+DETECTION_FEATURES: List[str] = [
+    "duration", "orig_bytes", "resp_bytes", "proto_encoded", "conn_state_encoded"
+]
 
-# Protocol and connection state mappings for encoding
-PROTO_MAP = {"tcp": 0, "udp": 1, "icmp": 2}
-CONN_STATE_MAP = {
+# Protocol encoding map (categorical -> numeric)
+PROTO_MAP: Dict[str, int] = {"tcp": 0, "udp": 1, "icmp": 2}
+
+# Connection state encoding map (Zeek states -> numeric)
+CONN_STATE_MAP: Dict[str, int] = {
     "S0": 0, "S1": 1, "SF": 2, "REJ": 3, "S2": 4, "S3": 5,
     "RSTO": 6, "RSTR": 7, "RSTOS0": 8, "RSTRH": 9, "SH": 10,
     "SHR": 11, "OTH": 12
 }
 
-# Default baseline save path
-DEFAULT_BASELINE_PATH = "network_baseline.pkl"
-DEFAULT_BASELINE_JSON_PATH = "network_baseline.json"
+# Default paths for baseline files
+DEFAULT_BASELINE_PATH: str = "network_baseline.pkl"
 
-# Z-score threshold for fallback detection
-ZSCORE_THRESHOLD = 3.0
+# Z-score threshold for fallback anomaly detection
+ZSCORE_THRESHOLD: float = 3.0
 
-# Anomaly severity thresholds
-SEVERITY_THRESHOLDS = {
-    "critical": 4.0,  # z-score >= 4.0
-    "high": 3.0,      # z-score >= 3.0
-    "medium": 2.0,    # z-score >= 2.0
+# Anomaly severity thresholds based on z-score
+SEVERITY_THRESHOLDS: Dict[str, float] = {
+    "critical": 4.0,
+    "high": 3.0,
+    "medium": 2.0,
 }
 
 
@@ -92,10 +110,11 @@ class ZeekConnLogParser:
     """
     Parser for Zeek conn.log files.
     
-    Handles TSV format with # comment lines (headers and metadata).
+    Handles TSV format with # comment lines (Zeek metadata/headers).
+    Gracefully handles missing files and malformed data.
     """
     
-    def __init__(self, log_path: str):
+    def __init__(self, log_path: str) -> None:
         """
         Initialize the parser.
         
@@ -106,22 +125,24 @@ class ZeekConnLogParser:
         
     def parse(self) -> pd.DataFrame:
         """
-        Parse the Zeek conn.log file.
+        Parse the Zeek conn.log file into a DataFrame.
         
         Returns:
             DataFrame with connection records
             
         Raises:
             FileNotFoundError: If log file doesn't exist
-            ValueError: If parsing fails
+            ValueError: If parsing fails completely
         """
+        # Check if file exists
         if not self.log_path.exists():
+            logger.error(f"Log file not found: {self.log_path}")
             raise FileNotFoundError(f"Log file not found: {self.log_path}")
             
         logger.info(f"Parsing Zeek conn.log: {self.log_path}")
         
         try:
-            # Read file, skip lines starting with #
+            # Read TSV file, skip lines starting with # (Zeek metadata)
             df = pd.read_csv(
                 self.log_path,
                 sep="\t",
@@ -131,13 +152,17 @@ class ZeekConnLogParser:
                 low_memory=False
             )
             
-            # Handle case where file has Zeek TSV header format
-            # First line after #fields might contain actual column names
+            # Handle edge case: first data row might be column headers
             if not df.empty and df.iloc[0]["ts"] == "ts":
                 df = df.iloc[1:].reset_index(drop=True)
+                logger.debug("Skipped header row in data")
             
-            logger.info(f"Parsed {len(df)} connection records")
+            logger.info(f"Successfully parsed {len(df)} connection records")
             return df
+            
+        except pd.errors.EmptyDataError:
+            logger.warning(f"Log file is empty: {self.log_path}")
+            return pd.DataFrame(columns=CONN_LOG_COLUMNS)
             
         except Exception as e:
             logger.error(f"Failed to parse conn.log: {e}")
@@ -150,51 +175,66 @@ class ZeekConnLogParser:
 
 class FeatureExtractor:
     """
-    Extracts and preprocesses features from connection data for anomaly detection.
+    Extracts and preprocesses features from connection data.
+    
+    Transforms raw Zeek connection records into numeric features
+    suitable for machine learning models.
     """
     
-    def __init__(self):
-        """Initialize encoders for categorical features."""
+    def __init__(self) -> None:
+        """Initialize the feature extractor with label encoders."""
         self.proto_encoder = LabelEncoder()
         self.state_encoder = LabelEncoder()
-        self._proto_fitted = False
-        self._state_fitted = False
         
     def extract_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Extract features from connection DataFrame.
+        Extract and transform features from connection DataFrame.
         
-        Features:
-        - duration: Connection duration (seconds)
-        - orig_bytes: Bytes from originator
-        - resp_bytes: Bytes from responder
-        - proto_encoded: Protocol (tcp/udp/icmp) encoded as integer
-        - conn_state_encoded: Connection state encoded as integer
-        - total_bytes: orig_bytes + resp_bytes (for z-score fallback)
+        Features extracted:
+        - duration: Connection duration in seconds
+        - orig_bytes: Bytes sent by originator
+        - resp_bytes: Bytes sent by responder
+        - proto_encoded: Protocol (tcp/udp/icmp) as integer
+        - conn_state_encoded: Connection state as integer
+        - total_bytes: Sum of orig_bytes + resp_bytes (for z-score)
         
         Args:
-            df: Raw connection DataFrame from parser
+            df: Raw connection DataFrame from ZeekConnLogParser
             
         Returns:
-            DataFrame with extracted features
+            DataFrame with extracted and encoded features
         """
         features = pd.DataFrame()
         
-        # Numeric features - fill NaN with 0
-        features["duration"] = pd.to_numeric(df["duration"], errors="coerce").fillna(0)
-        features["orig_bytes"] = pd.to_numeric(df["orig_bytes"], errors="coerce").fillna(0)
-        features["resp_bytes"] = pd.to_numeric(df["resp_bytes"], errors="coerce").fillna(0)
+        # Numeric features - coerce errors and fill NaN with 0
+        features["duration"] = pd.to_numeric(
+            df["duration"], errors="coerce"
+        ).fillna(0)
+        
+        features["orig_bytes"] = pd.to_numeric(
+            df["orig_bytes"], errors="coerce"
+        ).fillna(0)
+        
+        features["resp_bytes"] = pd.to_numeric(
+            df["resp_bytes"], errors="coerce"
+        ).fillna(0)
+        
+        # Derived feature for z-score fallback
         features["total_bytes"] = features["orig_bytes"] + features["resp_bytes"]
         
-        # Encode protocol
+        # Encode protocol using predefined mapping
         proto = df["proto"].fillna("unknown").str.lower()
-        features["proto_encoded"] = proto.map(lambda x: PROTO_MAP.get(x, 3))
+        features["proto_encoded"] = proto.map(
+            lambda x: PROTO_MAP.get(x, 3)  # 3 = unknown
+        )
         
-        # Encode connection state
+        # Encode connection state using predefined mapping
         conn_state = df["conn_state"].fillna("OTH")
-        features["conn_state_encoded"] = conn_state.map(lambda x: CONN_STATE_MAP.get(x, 12))
+        features["conn_state_encoded"] = conn_state.map(
+            lambda x: CONN_STATE_MAP.get(x, 12)  # 12 = OTH (other)
+        )
         
-        # Keep original connection info for alert generation
+        # Preserve original fields for alert generation
         features["ts"] = df["ts"]
         features["src_ip"] = df["id.orig_h"]
         features["src_port"] = df["id.orig_p"]
@@ -207,13 +247,13 @@ class FeatureExtractor:
     
     def get_model_features(self, df: pd.DataFrame) -> np.ndarray:
         """
-        Get the feature matrix for model training/prediction.
+        Extract feature matrix for model training/prediction.
         
         Args:
             df: DataFrame with extracted features
             
         Returns:
-            NumPy array with detection features
+            NumPy array of shape (n_samples, n_features)
         """
         return df[DETECTION_FEATURES].values
 
@@ -226,11 +266,11 @@ class NetworkAnomalyDetector:
     """
     Detects network traffic anomalies using IsolationForest.
     
-    Supports two modes:
+    Supports two operational modes:
     - collect: Build and save baseline from normal traffic
-    - detect: Load baseline and detect anomalies
+    - detect: Load baseline and identify anomalies
     
-    Uses z-score on total_bytes as fallback when model unavailable.
+    Falls back to z-score on total_bytes when model unavailable.
     """
     
     def __init__(
@@ -239,13 +279,13 @@ class NetworkAnomalyDetector:
         contamination: float = 0.01,
         n_estimators: int = 100,
         random_state: int = 42
-    ):
+    ) -> None:
         """
         Initialize the anomaly detector.
         
         Args:
             baseline_path: Path for saving/loading baseline model
-            contamination: Expected proportion of outliers (for IsolationForest)
+            contamination: Expected proportion of outliers (0.0-0.5)
             n_estimators: Number of trees in IsolationForest
             random_state: Random seed for reproducibility
         """
@@ -258,7 +298,11 @@ class NetworkAnomalyDetector:
         self.feature_extractor = FeatureExtractor()
         self.baseline_stats: Dict[str, Any] = {}
         
-    def collect_baseline(self, log_path: str, save_json: bool = True) -> Dict[str, Any]:
+    def collect_baseline(
+        self, 
+        log_path: str, 
+        save_json: bool = True
+    ) -> Dict[str, Any]:
         """
         Collect baseline from normal traffic data.
         
@@ -266,32 +310,37 @@ class NetworkAnomalyDetector:
         and calculates statistics for z-score fallback.
         
         Args:
-            log_path: Path to Zeek conn.log file
+            log_path: Path to Zeek conn.log file with normal traffic
             save_json: Whether to also save baseline stats as JSON
             
         Returns:
-            Dictionary with baseline statistics
+            Dictionary containing baseline statistics
+            
+        Raises:
+            FileNotFoundError: If log file doesn't exist
+            ValueError: If no valid records found
         """
-        logger.info("Collecting baseline from normal traffic...")
+        logger.info("Starting baseline collection from normal traffic...")
         
         # Parse log file
         parser = ZeekConnLogParser(log_path)
         conn_df = parser.parse()
         
         if conn_df.empty:
+            logger.error("No connection records found in log file")
             raise ValueError("No connection records found in log file")
         
         # Extract features
         features_df = self.feature_extractor.extract_features(conn_df)
         X = self.feature_extractor.get_model_features(features_df)
         
-        # Train IsolationForest
+        # Train IsolationForest model
         logger.info(f"Training IsolationForest on {len(X)} samples...")
         self.model = IsolationForest(
             n_estimators=self.n_estimators,
             contamination=self.contamination,
             random_state=self.random_state,
-            n_jobs=-1
+            n_jobs=-1  # Use all CPU cores
         )
         self.model.fit(X)
         
@@ -306,29 +355,36 @@ class NetworkAnomalyDetector:
             "features": DETECTION_FEATURES
         }
         
-        # Save baseline (pickle for model, JSON for stats)
+        # Save baseline model and stats
         self._save_baseline()
         
         if save_json:
             json_path = self.baseline_path.with_suffix(".json")
-            with open(json_path, "w") as f:
-                json.dump(self.baseline_stats, f, indent=2)
-            logger.info(f"Baseline stats saved to: {json_path}")
+            try:
+                with open(json_path, "w") as f:
+                    json.dump(self.baseline_stats, f, indent=2)
+                logger.info(f"Baseline stats saved to: {json_path}")
+            except IOError as e:
+                logger.warning(f"Failed to save JSON stats: {e}")
         
         logger.info(f"Baseline collected: {self.baseline_stats['sample_count']} samples")
         return self.baseline_stats
     
     def _save_baseline(self) -> None:
-        """Save the trained model and stats to pickle file."""
+        """Save trained model and stats to pickle file."""
         baseline_data = {
             "model": self.model,
             "stats": self.baseline_stats,
             "version": "1.0"
         }
         
-        with open(self.baseline_path, "wb") as f:
-            pickle.dump(baseline_data, f)
-        logger.info(f"Baseline model saved to: {self.baseline_path}")
+        try:
+            with open(self.baseline_path, "wb") as f:
+                pickle.dump(baseline_data, f)
+            logger.info(f"Baseline model saved to: {self.baseline_path}")
+        except IOError as e:
+            logger.error(f"Failed to save baseline: {e}")
+            raise
     
     def _load_baseline(self) -> bool:
         """
@@ -348,29 +404,49 @@ class NetworkAnomalyDetector:
             self.model = baseline_data.get("model")
             self.baseline_stats = baseline_data.get("stats", {})
             
-            logger.info(f"Baseline loaded: {self.baseline_stats.get('sample_count', 0)} samples")
+            sample_count = self.baseline_stats.get("sample_count", 0)
+            logger.info(f"Baseline loaded: {sample_count} samples")
             return True
             
-        except Exception as e:
+        except (IOError, pickle.PickleError) as e:
             logger.error(f"Failed to load baseline: {e}")
             return False
     
-    def _calculate_zscore(self, value: float, mean: float, std: float) -> float:
-        """Calculate z-score for a value."""
+    def _calculate_zscore(
+        self, 
+        value: float, 
+        mean: float, 
+        std: float
+    ) -> float:
+        """
+        Calculate z-score for a value.
+        
+        Args:
+            value: Observed value
+            mean: Baseline mean
+            std: Baseline standard deviation
+            
+        Returns:
+            Absolute z-score value
+        """
         if std == 0:
             return 0.0
         return abs((value - mean) / std)
     
-    def _determine_severity(self, zscore: float, is_isolation_forest: bool = False) -> str:
+    def _determine_severity(
+        self, 
+        zscore: float, 
+        is_isolation_forest: bool = False
+    ) -> str:
         """
         Determine anomaly severity based on z-score.
         
         Args:
             zscore: Calculated z-score
-            is_isolation_forest: Whether detection was by IsolationForest
+            is_isolation_forest: Whether detected by IsolationForest
             
         Returns:
-            Severity level: "low", "medium", "high", or "critical"
+            Severity level: "critical", "high", "medium", or "low"
         """
         if is_isolation_forest:
             # IsolationForest detections are at least medium severity
@@ -380,6 +456,7 @@ class NetworkAnomalyDetector:
                 return "high"
             return "medium"
         
+        # Z-score only detection
         if zscore >= SEVERITY_THRESHOLDS["critical"]:
             return "critical"
         elif zscore >= SEVERITY_THRESHOLDS["high"]:
@@ -392,46 +469,49 @@ class NetworkAnomalyDetector:
         """
         Detect anomalies in network traffic.
         
-        Uses IsolationForest if model available, falls back to z-score
-        on total_bytes otherwise.
+        Uses IsolationForest if model available, otherwise falls back
+        to z-score detection on total_bytes.
         
         Args:
-            log_path: Path to Zeek conn.log file
+            log_path: Path to Zeek conn.log file to analyze
             
         Returns:
             List of anomaly alert dictionaries
         """
         logger.info("Starting anomaly detection...")
         
-        # Load baseline
+        # Try to load trained baseline
         has_model = self._load_baseline()
         
-        # Parse log file
-        parser = ZeekConnLogParser(log_path)
-        conn_df = parser.parse()
+        # Parse and extract features from log file
+        try:
+            parser = ZeekConnLogParser(log_path)
+            conn_df = parser.parse()
+        except FileNotFoundError:
+            logger.error(f"Log file not found: {log_path}")
+            return []
         
         if conn_df.empty:
             logger.warning("No connection records to analyze")
             return []
         
-        # Extract features
         features_df = self.feature_extractor.extract_features(conn_df)
         
-        anomalies = []
-        
+        # Detect anomalies using appropriate method
         if has_model and self.model is not None:
-            # Use IsolationForest for detection
             logger.info("Using IsolationForest for detection")
             anomalies = self._detect_with_isolation_forest(features_df)
         else:
-            # Fallback to z-score method
             logger.warning("No trained model available, using z-score fallback")
             anomalies = self._detect_with_zscore(features_df)
         
-        logger.info(f"Detected {len(anomalies)} anomalies")
+        logger.info(f"Detection complete: {len(anomalies)} anomalies found")
         return anomalies
     
-    def _detect_with_isolation_forest(self, features_df: pd.DataFrame) -> List[Dict[str, Any]]:
+    def _detect_with_isolation_forest(
+        self, 
+        features_df: pd.DataFrame
+    ) -> List[Dict[str, Any]]:
         """
         Detect anomalies using trained IsolationForest model.
         
@@ -439,11 +519,11 @@ class NetworkAnomalyDetector:
             features_df: DataFrame with extracted features
             
         Returns:
-            List of anomaly alerts
+            List of anomaly alert dictionaries
         """
         X = self.feature_extractor.get_model_features(features_df)
         
-        # Predict: -1 for anomalies, 1 for normal
+        # Predict: -1 = anomaly, 1 = normal
         predictions = self.model.predict(X)
         scores = self.model.decision_function(X)
         
@@ -453,7 +533,7 @@ class NetworkAnomalyDetector:
         for idx in anomaly_indices:
             row = features_df.iloc[idx]
             
-            # Calculate z-score for severity
+            # Calculate z-score for severity determination
             total_bytes = row["total_bytes"]
             zscore = self._calculate_zscore(
                 total_bytes,
@@ -474,7 +554,10 @@ class NetworkAnomalyDetector:
         
         return anomalies
     
-    def _detect_with_zscore(self, features_df: pd.DataFrame) -> List[Dict[str, Any]]:
+    def _detect_with_zscore(
+        self, 
+        features_df: pd.DataFrame
+    ) -> List[Dict[str, Any]]:
         """
         Detect anomalies using z-score on total_bytes (fallback method).
         
@@ -482,18 +565,25 @@ class NetworkAnomalyDetector:
             features_df: DataFrame with extracted features
             
         Returns:
-            List of anomaly alerts
+            List of anomaly alert dictionaries
         """
-        # Use baseline stats if available, otherwise calculate from current data
+        # Use baseline stats if available, otherwise compute from data
         if self.baseline_stats:
-            mean = self.baseline_stats.get("total_bytes_mean", features_df["total_bytes"].mean())
-            std = self.baseline_stats.get("total_bytes_std", features_df["total_bytes"].std())
+            mean = self.baseline_stats.get(
+                "total_bytes_mean", 
+                features_df["total_bytes"].mean()
+            )
+            std = self.baseline_stats.get(
+                "total_bytes_std", 
+                features_df["total_bytes"].std()
+            )
         else:
             mean = features_df["total_bytes"].mean()
             std = features_df["total_bytes"].std()
         
+        # Prevent division by zero
         if std == 0:
-            std = 1  # Prevent division by zero
+            std = 1
         
         anomalies = []
         
@@ -527,16 +617,16 @@ class NetworkAnomalyDetector:
         Create a JSON alert dictionary for an anomaly.
         
         Args:
-            row: Feature row for the anomaly
+            row: Feature row for the anomalous connection
             severity: Severity level
             zscore: Z-score value
-            anomaly_score: IsolationForest anomaly score (if applicable)
-            detection_method: Method used for detection
+            anomaly_score: IsolationForest score (if applicable)
+            detection_method: Detection method used
             
         Returns:
-            Alert dictionary
+            Alert dictionary with full anomaly details
         """
-        alert = {
+        alert: Dict[str, Any] = {
             "module": "network",
             "type": "connection_anomaly",
             "severity": severity,
@@ -575,7 +665,7 @@ class NetworkAnomalyDetector:
 # =============================================================================
 
 def create_parser() -> argparse.ArgumentParser:
-    """Create the argument parser for CLI."""
+    """Create argument parser for CLI interface."""
     parser = argparse.ArgumentParser(
         description="SecuriSphere Network Anomaly Detector",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -588,10 +678,21 @@ Examples:
   python anomaly_detector.py --log-path /logs/conn.log --mode detect
 
   # Specify custom baseline path
-  python anomaly_detector.py --log-path /logs/conn.log --mode detect --baseline /path/to/baseline.pkl
+  python anomaly_detector.py --log-path /logs/conn.log --mode detect \\
+      --baseline /path/to/baseline.pkl
 
   # Output alerts to file
-  python anomaly_detector.py --log-path /logs/conn.log --mode detect --output alerts.json
+  python anomaly_detector.py --log-path /logs/conn.log --mode detect \\
+      --output alerts.json
+
+Simulation (generate traffic from attacker container):
+  # Normal traffic for baseline:
+  nmap -sT victim-app
+  curl http://victim-app:8000/
+
+  # Anomalous traffic for detection:
+  nmap -sS -p- victim-app           # Full port scan
+  hping3 --flood victim-app         # Flood attack
         """
     )
     
@@ -616,7 +717,7 @@ Examples:
     
     parser.add_argument(
         "--output",
-        help="Output file for alerts (JSON format). If not specified, prints to stdout"
+        help="Output file for alerts (JSON format). Prints to stdout if not specified"
     )
     
     parser.add_argument(
@@ -629,13 +730,13 @@ Examples:
     parser.add_argument(
         "--verbose", "-v",
         action="store_true",
-        help="Enable verbose logging"
+        help="Enable verbose/debug logging"
     )
     
     return parser
 
 
-def main():
+def main() -> None:
     """Main entry point for CLI."""
     parser = create_parser()
     args = parser.parse_args()
@@ -643,6 +744,7 @@ def main():
     # Configure logging level
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
+        logger.debug("Verbose logging enabled")
     
     # Initialize detector
     detector = NetworkAnomalyDetector(
@@ -674,8 +776,8 @@ def main():
                 print("\nNo anomalies detected.")
                 return
             
-            # Output results
-            output_data = {
+            # Build output data structure
+            output_data: Dict[str, Any] = {
                 "module": "network",
                 "analysis_timestamp": datetime.utcnow().isoformat(),
                 "log_file": str(args.log_path),
@@ -706,13 +808,22 @@ def main():
                 print(json.dumps(anomalies, indent=2))
                 
     except FileNotFoundError as e:
+        logger.error(str(e))
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    except ValueError as e:
+        logger.error(str(e))
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
     except Exception as e:
-        logger.exception("Detection failed")
+        logger.exception("Unexpected error during detection")
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
+
+# =============================================================================
+# Demo Run
+# =============================================================================
 
 if __name__ == "__main__":
     main()

@@ -15,6 +15,21 @@ Features:
 - Generate JSON alerts for policy violations
 - Optional LDAP integration for OpenLDAP password policy queries
 
+Simulation:
+    # Create a sample password policy config:
+    echo "minlen=8
+    require_upper=yes
+    require_lower=yes
+    require_digit=yes
+    max_age=90
+    lockout_threshold=5" > /tmp/password.conf
+    
+    # Audit the policy:
+    python auditor.py --config /tmp/password.conf --standard nist-strict
+    
+    # Query LDAP (if OpenLDAP running):
+    python auditor.py --ldap-uri ldap://openldap:389 --base-dn "dc=example,dc=com"
+
 Usage:
     # Audit a policy config file
     python auditor.py --config /path/to/password.conf
@@ -27,15 +42,20 @@ import argparse
 import json
 import logging
 import sys
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-# Configure logging
+# =============================================================================
+# Logging Configuration
+# =============================================================================
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
 )
 logger = logging.getLogger(__name__)
 
@@ -46,7 +66,12 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class SecurityStandard:
-    """Defines a security standard for password policies."""
+    """
+    Defines a security standard for password policies.
+    
+    Based on NIST SP 800-63B Digital Identity Guidelines and
+    industry best practices for password security.
+    """
     name: str
     min_length: int = 12
     max_length: int = 128
@@ -117,7 +142,8 @@ INDUSTRY_BEST_PRACTICE = SecurityStandard(
     description="Traditional enterprise security requirements"
 )
 
-AVAILABLE_STANDARDS = {
+# Available standards for selection
+AVAILABLE_STANDARDS: Dict[str, SecurityStandard] = {
     "nist": NIST_800_63B,
     "nist-strict": NIST_800_63B_STRICT,
     "industry": INDUSTRY_BEST_PRACTICE
@@ -130,7 +156,11 @@ AVAILABLE_STANDARDS = {
 
 @dataclass
 class PasswordPolicy:
-    """Represents a parsed password policy configuration."""
+    """
+    Represents a parsed password policy configuration.
+    
+    Stores all policy settings extracted from a config file or LDAP.
+    """
     min_length: int = 8
     max_length: int = 128
     require_uppercase: bool = False
@@ -147,7 +177,7 @@ class PasswordPolicy:
     source: str = "config"
     
     def to_dict(self) -> Dict[str, Any]:
-        """Convert policy to dictionary."""
+        """Convert policy to dictionary for JSON serialization."""
         return asdict(self)
 
 
@@ -155,7 +185,7 @@ class PolicyConfigParser:
     """
     Parser for password policy configuration files.
     
-    Supports key=value format with the following keys:
+    Supports key=value format with various common key names:
     - minlen / min_length: Minimum password length
     - maxlen / max_length: Maximum password length
     - require_upper / ucredit: Require uppercase letters
@@ -172,15 +202,15 @@ class PolicyConfigParser:
     """
     
     # Mapping of config keys to policy attributes
-    KEY_MAPPING = {
-        # Length
+    KEY_MAPPING: Dict[str, str] = {
+        # Length settings
         "minlen": "min_length",
         "min_length": "min_length",
         "minlength": "min_length",
         "maxlen": "max_length",
         "max_length": "max_length",
         "maxlength": "max_length",
-        # Complexity
+        # Complexity settings
         "require_upper": "require_uppercase",
         "ucredit": "require_uppercase",
         "uppercase": "require_uppercase",
@@ -193,36 +223,36 @@ class PolicyConfigParser:
         "require_special": "require_special",
         "ocredit": "require_special",
         "special": "require_special",
-        # Age
+        # Age settings
         "max_age": "max_age_days",
         "maxage": "max_age_days",
         "password_max_age": "max_age_days",
         "min_age": "min_age_days",
         "minage": "min_age_days",
         "password_min_age": "min_age_days",
-        # History
+        # History settings
         "history": "history_count",
         "remember": "history_count",
         "password_history": "history_count",
-        # Lockout
+        # Lockout settings
         "lockout_threshold": "lockout_threshold",
         "deny": "lockout_threshold",
         "fail_attempts": "lockout_threshold",
         "lockout_duration": "lockout_duration_minutes",
         "unlock_time": "lockout_duration_minutes",
         "lockout_time": "lockout_duration_minutes",
-        # Other
+        # Other settings
         "allow_common": "allow_common_passwords",
         "dictcheck": "allow_common_passwords",
         "require_mfa": "require_mfa",
         "mfa": "require_mfa",
     }
     
-    # Values that represent "yes/true"
-    TRUE_VALUES = {"yes", "true", "1", "on", "enabled", "require"}
-    FALSE_VALUES = {"no", "false", "0", "off", "disabled"}
+    # Values representing boolean true
+    TRUE_VALUES: set = {"yes", "true", "1", "on", "enabled", "require"}
+    FALSE_VALUES: set = {"no", "false", "0", "off", "disabled"}
     
-    def __init__(self, config_path: str):
+    def __init__(self, config_path: str) -> None:
         """
         Initialize the parser.
         
@@ -233,16 +263,17 @@ class PolicyConfigParser:
         
     def parse(self) -> PasswordPolicy:
         """
-        Parse the configuration file.
+        Parse the configuration file into a PasswordPolicy.
         
         Returns:
             PasswordPolicy object with parsed settings
             
         Raises:
             FileNotFoundError: If config file doesn't exist
-            ValueError: If parsing fails
+            ValueError: If parsing fails completely
         """
         if not self.config_path.exists():
+            logger.error(f"Config file not found: {self.config_path}")
             raise FileNotFoundError(f"Config file not found: {self.config_path}")
         
         logger.info(f"Parsing policy config: {self.config_path}")
@@ -258,7 +289,7 @@ class PolicyConfigParser:
                     if not line or line.startswith("#") or line.startswith(";"):
                         continue
                     
-                    # Parse key=value
+                    # Parse key=value pairs
                     if "=" in line:
                         key, value = line.split("=", 1)
                         key = key.strip().lower()
@@ -266,17 +297,31 @@ class PolicyConfigParser:
                         
                         self._apply_setting(policy, key, value, line_num)
                     else:
-                        logger.warning(f"Line {line_num}: Invalid format, skipping: {line}")
+                        logger.debug(f"Line {line_num}: Invalid format, skipping: {line}")
             
-            logger.info(f"Parsed policy: min_length={policy.min_length}, complexity requirements set")
+            logger.info(f"Parsed policy: min_length={policy.min_length}")
             return policy
             
-        except Exception as e:
-            logger.error(f"Failed to parse config: {e}")
-            raise ValueError(f"Failed to parse config: {e}")
+        except IOError as e:
+            logger.error(f"Failed to read config file: {e}")
+            raise ValueError(f"Failed to read config file: {e}")
     
-    def _apply_setting(self, policy: PasswordPolicy, key: str, value: str, line_num: int) -> None:
-        """Apply a single setting to the policy."""
+    def _apply_setting(
+        self, 
+        policy: PasswordPolicy, 
+        key: str, 
+        value: str, 
+        line_num: int
+    ) -> None:
+        """
+        Apply a single setting to the policy.
+        
+        Args:
+            policy: PasswordPolicy to update
+            key: Configuration key
+            value: Configuration value
+            line_num: Line number for error reporting
+        """
         # Map the key to policy attribute
         attr = self.KEY_MAPPING.get(key)
         
@@ -284,7 +329,7 @@ class PolicyConfigParser:
             logger.debug(f"Line {line_num}: Unknown key '{key}', skipping")
             return
         
-        # Determine the type and convert value
+        # Determine type and convert value
         current_value = getattr(policy, attr)
         
         if isinstance(current_value, bool):
@@ -300,25 +345,33 @@ class PolicyConfigParser:
                     int_val = int(value)
                     setattr(policy, attr, int_val < 0)
                 except ValueError:
-                    logger.warning(f"Line {line_num}: Invalid boolean value '{value}' for '{key}'")
+                    logger.warning(
+                        f"Line {line_num}: Invalid boolean value '{value}' for '{key}'"
+                    )
         
         elif isinstance(current_value, int):
             # Integer conversion
             try:
-                # Handle PAM-style negative values (absolute value)
+                # Handle PAM-style negative values (take absolute value)
                 int_val = abs(int(value))
                 setattr(policy, attr, int_val)
             except ValueError:
-                logger.warning(f"Line {line_num}: Invalid integer value '{value}' for '{key}'")
+                logger.warning(
+                    f"Line {line_num}: Invalid integer value '{value}' for '{key}'"
+                )
 
 
 # =============================================================================
-# Password Policy Auditor
+# Audit Issue and Result Data Classes
 # =============================================================================
 
 @dataclass
 class AuditIssue:
-    """Represents a single audit issue/finding."""
+    """
+    Represents a single audit issue/finding.
+    
+    Contains details about the security issue and recommendations.
+    """
     category: str
     severity: str  # "critical", "high", "medium", "low", "info"
     title: str
@@ -329,13 +382,17 @@ class AuditIssue:
     recommended_value: Any = None
     
     def to_dict(self) -> Dict[str, Any]:
-        """Convert issue to dictionary."""
+        """Convert issue to dictionary for JSON serialization."""
         return asdict(self)
 
 
 @dataclass
 class AuditResult:
-    """Results of a password policy audit."""
+    """
+    Complete results of a password policy audit.
+    
+    Contains the score, grade, all issues, and compliance status.
+    """
     policy: PasswordPolicy
     standard: SecurityStandard
     score: int  # 0-100
@@ -344,12 +401,13 @@ class AuditResult:
     compliant: bool = False
     audit_timestamp: str = ""
     
-    def __post_init__(self):
+    def __post_init__(self) -> None:
+        """Set audit timestamp if not provided."""
         if not self.audit_timestamp:
             self.audit_timestamp = datetime.utcnow().isoformat()
     
     def to_dict(self) -> Dict[str, Any]:
-        """Convert result to dictionary."""
+        """Convert result to dictionary for JSON serialization."""
         return {
             "policy": self.policy.to_dict(),
             "standard": asdict(self.standard),
@@ -369,6 +427,10 @@ class AuditResult:
         }
 
 
+# =============================================================================
+# Password Policy Auditor
+# =============================================================================
+
 class PasswordPolicyAuditor:
     """
     Audits password policies against security standards.
@@ -378,8 +440,8 @@ class PasswordPolicyAuditor:
     identifying security issues.
     """
     
-    # Scoring weights for different categories
-    SCORE_WEIGHTS = {
+    # Scoring weights for different categories (total = 100)
+    SCORE_WEIGHTS: Dict[str, int] = {
         "length": 25,
         "complexity": 15,
         "rotation": 10,
@@ -389,16 +451,23 @@ class PasswordPolicyAuditor:
         "common_passwords": 5,
     }
     
-    def __init__(self, standard: str = "nist-strict"):
+    def __init__(self, standard: str = "nist-strict") -> None:
         """
         Initialize the auditor.
         
         Args:
             standard: Security standard to audit against
                      ("nist", "nist-strict", "industry")
+                     
+        Raises:
+            ValueError: If unknown standard specified
         """
         if standard not in AVAILABLE_STANDARDS:
-            raise ValueError(f"Unknown standard: {standard}. Available: {list(AVAILABLE_STANDARDS.keys())}")
+            logger.error(f"Unknown standard: {standard}")
+            raise ValueError(
+                f"Unknown standard: {standard}. "
+                f"Available: {list(AVAILABLE_STANDARDS.keys())}"
+            )
         
         self.standard = AVAILABLE_STANDARDS[standard]
         logger.info(f"Using security standard: {self.standard.name}")
@@ -412,6 +481,9 @@ class PasswordPolicyAuditor:
             
         Returns:
             AuditResult with score, grade, and issues
+            
+        Raises:
+            FileNotFoundError: If config file doesn't exist
         """
         parser = PolicyConfigParser(config_path)
         policy = parser.parse()
@@ -441,7 +513,7 @@ class PasswordPolicyAuditor:
         scores["mfa"] = self._check_mfa(policy, issues)
         scores["common_passwords"] = self._check_common_passwords(policy, issues)
         
-        # Calculate total score
+        # Calculate weighted total score
         total_score = 0
         for category, score in scores.items():
             weight = self.SCORE_WEIGHTS.get(category, 0)
@@ -449,11 +521,13 @@ class PasswordPolicyAuditor:
         
         total_score = int(total_score)
         
-        # Determine grade
+        # Determine letter grade
         grade = self._calculate_grade(total_score, issues)
         
-        # Check overall compliance (no critical or high issues)
-        critical_high_count = sum(1 for i in issues if i.severity in ("critical", "high"))
+        # Check compliance (no critical/high issues and score >= 70)
+        critical_high_count = sum(
+            1 for i in issues if i.severity in ("critical", "high")
+        )
         compliant = critical_high_count == 0 and total_score >= 70
         
         result = AuditResult(
@@ -465,10 +539,17 @@ class PasswordPolicyAuditor:
             compliant=compliant
         )
         
-        logger.info(f"Audit complete: Score={total_score}, Grade={grade}, Issues={len(issues)}")
+        logger.info(
+            f"Audit complete: Score={total_score}, Grade={grade}, "
+            f"Issues={len(issues)}"
+        )
         return result
     
-    def _check_length(self, policy: PasswordPolicy, issues: List[AuditIssue]) -> int:
+    def _check_length(
+        self, 
+        policy: PasswordPolicy, 
+        issues: List[AuditIssue]
+    ) -> int:
         """Check password length requirements."""
         score = 100
         
@@ -481,9 +562,17 @@ class PasswordPolicyAuditor:
                 category="length",
                 severity=severity,
                 title="Minimum password length too short",
-                description=f"Current minimum length ({policy.min_length}) is below the recommended minimum ({self.standard.min_length}).",
-                recommendation=f"Increase minimum password length to at least {self.standard.min_length} characters.",
-                standard_reference=f"{self.standard.name}: Minimum {self.standard.min_length} characters",
+                description=(
+                    f"Current minimum length ({policy.min_length}) is below "
+                    f"the recommended minimum ({self.standard.min_length})."
+                ),
+                recommendation=(
+                    f"Increase minimum password length to at least "
+                    f"{self.standard.min_length} characters."
+                ),
+                standard_reference=(
+                    f"{self.standard.name}: Minimum {self.standard.min_length} characters"
+                ),
                 current_value=policy.min_length,
                 recommended_value=self.standard.min_length
             ))
@@ -493,34 +582,47 @@ class PasswordPolicyAuditor:
                 category="length",
                 severity="medium",
                 title="Minimum password length could be stronger",
-                description=f"Current minimum length ({policy.min_length}) meets basic requirements but 12+ is recommended.",
-                recommendation="Consider increasing minimum password length to 12 or more characters.",
+                description=(
+                    f"Current minimum length ({policy.min_length}) meets basic "
+                    f"requirements but 12+ is recommended."
+                ),
+                recommendation="Consider increasing minimum password length to 12+.",
                 standard_reference="Industry best practice: 12+ characters",
                 current_value=policy.min_length,
                 recommended_value=12
             ))
         
-        # Maximum length check (should allow long passwords)
+        # Maximum length check (should allow long passwords/passphrases)
         if policy.max_length < 64:
             score -= 20
             issues.append(AuditIssue(
                 category="length",
                 severity="medium",
                 title="Maximum password length too restrictive",
-                description=f"Current maximum length ({policy.max_length}) may prevent use of passphrases.",
-                recommendation="Allow passwords up to at least 64 characters to support passphrases.",
-                standard_reference=f"{self.standard.name}: Support at least {self.standard.max_length} characters",
+                description=(
+                    f"Current maximum length ({policy.max_length}) may prevent "
+                    f"use of passphrases."
+                ),
+                recommendation="Allow passwords up to at least 64 characters.",
+                standard_reference=(
+                    f"{self.standard.name}: Support at least "
+                    f"{self.standard.max_length} characters"
+                ),
                 current_value=policy.max_length,
                 recommended_value=self.standard.max_length
             ))
         
         return max(0, score)
     
-    def _check_complexity(self, policy: PasswordPolicy, issues: List[AuditIssue]) -> int:
+    def _check_complexity(
+        self, 
+        policy: PasswordPolicy, 
+        issues: List[AuditIssue]
+    ) -> int:
         """Check password complexity requirements."""
         score = 100
         
-        # Note: NIST no longer recommends forced complexity rules
+        # NIST no longer recommends forced complexity rules
         # However, if standard requires them, we check
         
         if self.standard.name == "Industry Best Practice":
@@ -543,12 +645,15 @@ class PasswordPolicyAuditor:
                     title="Missing complexity requirements",
                     description=f"Policy does not require: {', '.join(missing)}.",
                     recommendation="Enable complexity requirements for character types.",
-                    standard_reference=f"{self.standard.name}: Require mixed character types",
+                    standard_reference=(
+                        f"{self.standard.name}: Require mixed character types"
+                    ),
                     current_value=f"Missing: {', '.join(missing)}",
                     recommended_value="All character types required"
                 ))
         else:
-            # NIST approach: complexity not required, but check for overly strict rules
+            # NIST approach: complexity not required
+            # But warn if overly strict rules are enforced
             enforced = []
             if policy.require_uppercase:
                 enforced.append("uppercase")
@@ -564,28 +669,45 @@ class PasswordPolicyAuditor:
                     category="complexity",
                     severity="info",
                     title="Complexity rules may be counterproductive",
-                    description=f"Policy enforces multiple character types: {', '.join(enforced)}. NIST no longer recommends this.",
-                    recommendation="Consider removing composition rules and focusing on length and breach detection.",
-                    standard_reference="NIST SP 800-63B: No composition rules recommended",
+                    description=(
+                        f"Policy enforces multiple character types: "
+                        f"{', '.join(enforced)}. NIST no longer recommends this."
+                    ),
+                    recommendation=(
+                        "Consider removing composition rules and focusing on "
+                        "length and breach detection."
+                    ),
+                    standard_reference="NIST SP 800-63B: No composition rules",
                     current_value=f"Required: {', '.join(enforced)}",
                     recommended_value="Focus on length over complexity"
                 ))
         
         return max(0, score)
     
-    def _check_rotation(self, policy: PasswordPolicy, issues: List[AuditIssue]) -> int:
+    def _check_rotation(
+        self, 
+        policy: PasswordPolicy, 
+        issues: List[AuditIssue]
+    ) -> int:
         """Check password rotation/age requirements."""
         score = 100
         
         # NIST recommends no periodic rotation
         if self.standard.max_age_days == 0:
-            if policy.max_age_days > 0 and policy.max_age_days < 365:
+            if 0 < policy.max_age_days < 365:
                 issues.append(AuditIssue(
                     category="rotation",
                     severity="info",
                     title="Periodic password rotation enforced",
-                    description=f"Policy requires password change every {policy.max_age_days} days. NIST no longer recommends periodic rotation.",
-                    recommendation="Consider removing periodic rotation and only require change on evidence of compromise.",
+                    description=(
+                        f"Policy requires password change every "
+                        f"{policy.max_age_days} days. NIST no longer recommends "
+                        "periodic rotation."
+                    ),
+                    recommendation=(
+                        "Consider removing periodic rotation. Only require "
+                        "change on evidence of compromise."
+                    ),
                     standard_reference="NIST SP 800-63B: No periodic rotation",
                     current_value=f"{policy.max_age_days} days",
                     recommended_value="No forced rotation"
@@ -598,9 +720,15 @@ class PasswordPolicyAuditor:
                     category="rotation",
                     severity="medium",
                     title="No password expiration policy",
-                    description="Passwords never expire, which may not meet compliance requirements.",
-                    recommendation=f"Consider implementing password expiration (e.g., every {self.standard.max_age_days} days).",
-                    standard_reference=f"{self.standard.name}: {self.standard.max_age_days} day maximum age",
+                    description="Passwords never expire.",
+                    recommendation=(
+                        f"Consider implementing password expiration "
+                        f"(every {self.standard.max_age_days} days)."
+                    ),
+                    standard_reference=(
+                        f"{self.standard.name}: "
+                        f"{self.standard.max_age_days} day maximum age"
+                    ),
                     current_value="Never expires",
                     recommended_value=f"{self.standard.max_age_days} days"
                 ))
@@ -610,16 +738,27 @@ class PasswordPolicyAuditor:
                     category="rotation",
                     severity="low",
                     title="Password expiration period too long",
-                    description=f"Password expires after {policy.max_age_days} days, longer than recommended.",
-                    recommendation=f"Reduce password expiration to {self.standard.max_age_days} days or less.",
-                    standard_reference=f"{self.standard.name}: {self.standard.max_age_days} day maximum age",
+                    description=(
+                        f"Password expires after {policy.max_age_days} days."
+                    ),
+                    recommendation=(
+                        f"Reduce expiration to {self.standard.max_age_days} days."
+                    ),
+                    standard_reference=(
+                        f"{self.standard.name}: "
+                        f"{self.standard.max_age_days} day maximum age"
+                    ),
                     current_value=f"{policy.max_age_days} days",
                     recommended_value=f"{self.standard.max_age_days} days"
                 ))
         
         return max(0, score)
     
-    def _check_lockout(self, policy: PasswordPolicy, issues: List[AuditIssue]) -> int:
+    def _check_lockout(
+        self, 
+        policy: PasswordPolicy, 
+        issues: List[AuditIssue]
+    ) -> int:
         """Check account lockout settings."""
         score = 100
         
@@ -630,9 +769,18 @@ class PasswordPolicyAuditor:
                 category="lockout",
                 severity="critical",
                 title="No account lockout configured",
-                description="Accounts are not locked after failed login attempts, allowing unlimited brute force attacks.",
-                recommendation=f"Configure account lockout after {self.standard.lockout_threshold} failed attempts.",
-                standard_reference=f"{self.standard.name}: Lockout after {self.standard.lockout_threshold} failures",
+                description=(
+                    "Accounts are not locked after failed attempts, "
+                    "allowing unlimited brute force attacks."
+                ),
+                recommendation=(
+                    f"Configure lockout after "
+                    f"{self.standard.lockout_threshold} failed attempts."
+                ),
+                standard_reference=(
+                    f"{self.standard.name}: Lockout after "
+                    f"{self.standard.lockout_threshold} failures"
+                ),
                 current_value="Disabled",
                 recommended_value=f"{self.standard.lockout_threshold} attempts"
             ))
@@ -642,29 +790,28 @@ class PasswordPolicyAuditor:
                 category="lockout",
                 severity="medium",
                 title="Lockout threshold too high",
-                description=f"Account locks after {policy.lockout_threshold} failures, which may be too permissive.",
-                recommendation=f"Reduce lockout threshold to {self.standard.lockout_threshold} or fewer attempts.",
-                standard_reference=f"{self.standard.name}: {self.standard.lockout_threshold} attempt threshold",
+                description=(
+                    f"Account locks after {policy.lockout_threshold} failures."
+                ),
+                recommendation=(
+                    f"Reduce lockout threshold to "
+                    f"{self.standard.lockout_threshold} or fewer."
+                ),
+                standard_reference=(
+                    f"{self.standard.name}: "
+                    f"{self.standard.lockout_threshold} attempt threshold"
+                ),
                 current_value=f"{policy.lockout_threshold} attempts",
                 recommended_value=f"{self.standard.lockout_threshold} attempts"
             ))
         
-        # Lockout duration check
-        if policy.lockout_threshold > 0 and policy.lockout_duration_minutes == 0:
-            issues.append(AuditIssue(
-                category="lockout",
-                severity="info",
-                title="Permanent lockout configured",
-                description="Locked accounts require administrator intervention to unlock.",
-                recommendation="Consider implementing timed lockout for better user experience.",
-                standard_reference="Best practice: Temporary lockout with progressive delays",
-                current_value="Permanent",
-                recommended_value=f"{self.standard.lockout_duration_minutes} minutes"
-            ))
-        
         return max(0, score)
     
-    def _check_history(self, policy: PasswordPolicy, issues: List[AuditIssue]) -> int:
+    def _check_history(
+        self, 
+        policy: PasswordPolicy, 
+        issues: List[AuditIssue]
+    ) -> int:
         """Check password history settings."""
         score = 100
         
@@ -676,8 +823,14 @@ class PasswordPolicyAuditor:
                     severity="high",
                     title="No password history enforcement",
                     description="Users can reuse previous passwords immediately.",
-                    recommendation=f"Enforce password history of at least {self.standard.history_count} passwords.",
-                    standard_reference=f"{self.standard.name}: Remember {self.standard.history_count} passwords",
+                    recommendation=(
+                        f"Enforce password history of at least "
+                        f"{self.standard.history_count} passwords."
+                    ),
+                    standard_reference=(
+                        f"{self.standard.name}: Remember "
+                        f"{self.standard.history_count} passwords"
+                    ),
                     current_value="Disabled",
                     recommended_value=f"{self.standard.history_count} passwords"
                 ))
@@ -687,16 +840,27 @@ class PasswordPolicyAuditor:
                     category="history",
                     severity="medium",
                     title="Password history too short",
-                    description=f"Only {policy.history_count} passwords remembered, users may cycle through quickly.",
-                    recommendation=f"Increase password history to {self.standard.history_count} passwords.",
-                    standard_reference=f"{self.standard.name}: Remember {self.standard.history_count} passwords",
+                    description=(
+                        f"Only {policy.history_count} passwords remembered."
+                    ),
+                    recommendation=(
+                        f"Increase to {self.standard.history_count} passwords."
+                    ),
+                    standard_reference=(
+                        f"{self.standard.name}: Remember "
+                        f"{self.standard.history_count} passwords"
+                    ),
                     current_value=f"{policy.history_count} passwords",
                     recommended_value=f"{self.standard.history_count} passwords"
                 ))
         
         return max(0, score)
     
-    def _check_mfa(self, policy: PasswordPolicy, issues: List[AuditIssue]) -> int:
+    def _check_mfa(
+        self, 
+        policy: PasswordPolicy, 
+        issues: List[AuditIssue]
+    ) -> int:
         """Check multi-factor authentication requirement."""
         score = 100
         
@@ -706,7 +870,7 @@ class PasswordPolicyAuditor:
                 category="mfa",
                 severity="high",
                 title="Multi-factor authentication not required",
-                description="MFA is not enforced, leaving accounts vulnerable to credential theft.",
+                description="MFA is not enforced.",
                 recommendation="Require multi-factor authentication for all users.",
                 standard_reference=f"{self.standard.name}: MFA required",
                 current_value="Not required",
@@ -715,7 +879,11 @@ class PasswordPolicyAuditor:
         
         return max(0, score)
     
-    def _check_common_passwords(self, policy: PasswordPolicy, issues: List[AuditIssue]) -> int:
+    def _check_common_passwords(
+        self, 
+        policy: PasswordPolicy, 
+        issues: List[AuditIssue]
+    ) -> int:
         """Check common password/dictionary checking."""
         score = 100
         
@@ -725,7 +893,7 @@ class PasswordPolicyAuditor:
                 category="common_passwords",
                 severity="high",
                 title="Common password checking disabled",
-                description="Users can set easily guessed passwords from common password lists.",
+                description="Users can set easily guessed passwords.",
                 recommendation="Enable dictionary/common password checking.",
                 standard_reference=f"{self.standard.name}: Block common passwords",
                 current_value="Allowed",
@@ -734,9 +902,12 @@ class PasswordPolicyAuditor:
         
         return max(0, score)
     
-    def _calculate_grade(self, score: int, issues: List[AuditIssue]) -> str:
+    def _calculate_grade(
+        self, 
+        score: int, 
+        issues: List[AuditIssue]
+    ) -> str:
         """Calculate letter grade based on score and issues."""
-        # Critical issues automatically lower grade
         critical_count = sum(1 for i in issues if i.severity == "critical")
         high_count = sum(1 for i in issues if i.severity == "high")
         
@@ -757,13 +928,13 @@ class PasswordPolicyAuditor:
     
     def generate_alert(self, result: AuditResult) -> Dict[str, Any]:
         """
-        Generate a JSON alert for audit results.
+        Generate a JSON alert from audit results.
         
         Args:
             result: AuditResult from audit
             
         Returns:
-            Alert dictionary
+            Alert dictionary suitable for JSON output
         """
         # Determine overall severity
         if result.grade == "F":
@@ -775,7 +946,7 @@ class PasswordPolicyAuditor:
         else:
             severity = "low"
         
-        alert = {
+        alert: Dict[str, Any] = {
             "module": "password",
             "type": "policy_audit",
             "severity": severity,
@@ -788,14 +959,32 @@ class PasswordPolicyAuditor:
                 "issues_count": len(result.issues),
             },
             "issues_by_severity": {
-                "critical": [i.to_dict() for i in result.issues if i.severity == "critical"],
-                "high": [i.to_dict() for i in result.issues if i.severity == "high"],
-                "medium": [i.to_dict() for i in result.issues if i.severity == "medium"],
-                "low": [i.to_dict() for i in result.issues if i.severity == "low"],
-                "info": [i.to_dict() for i in result.issues if i.severity == "info"],
+                "critical": [
+                    i.to_dict() for i in result.issues 
+                    if i.severity == "critical"
+                ],
+                "high": [
+                    i.to_dict() for i in result.issues 
+                    if i.severity == "high"
+                ],
+                "medium": [
+                    i.to_dict() for i in result.issues 
+                    if i.severity == "medium"
+                ],
+                "low": [
+                    i.to_dict() for i in result.issues 
+                    if i.severity == "low"
+                ],
+                "info": [
+                    i.to_dict() for i in result.issues 
+                    if i.severity == "info"
+                ],
             },
             "policy": result.policy.to_dict(),
-            "recommendations": [i.recommendation for i in result.issues if i.severity in ("critical", "high")]
+            "recommendations": [
+                i.recommendation for i in result.issues 
+                if i.severity in ("critical", "high")
+            ]
         }
         
         return alert
@@ -809,7 +998,8 @@ class LDAPPolicyReader:
     """
     Reads password policy from OpenLDAP server.
     
-    Requires ldap3 package to be installed.
+    Requires ldap3 package to be installed:
+        pip install ldap3
     """
     
     def __init__(
@@ -818,7 +1008,7 @@ class LDAPPolicyReader:
         base_dn: str,
         bind_dn: Optional[str] = None,
         bind_password: Optional[str] = None
-    ):
+    ) -> None:
         """
         Initialize LDAP connection parameters.
         
@@ -843,7 +1033,9 @@ class LDAPPolicyReader:
         try:
             from ldap3 import Server, Connection, ALL, SUBTREE
         except ImportError:
-            logger.warning("ldap3 package not installed. Install with: pip install ldap3")
+            logger.warning(
+                "ldap3 package not installed. Install with: pip install ldap3"
+            )
             return None
         
         try:
@@ -852,12 +1044,13 @@ class LDAPPolicyReader:
             server = Server(self.ldap_uri, get_info=ALL)
             
             if self.bind_dn and self.bind_password:
-                conn = Connection(server, self.bind_dn, self.bind_password, auto_bind=True)
+                conn = Connection(
+                    server, self.bind_dn, self.bind_password, auto_bind=True
+                )
             else:
                 conn = Connection(server, auto_bind=True)
             
-            # Search for password policy
-            # OpenLDAP stores policies under cn=config or in ppolicy overlay
+            # Search for password policy in common locations
             policy_search_bases = [
                 f"cn=config",
                 f"ou=policies,{self.base_dn}",
@@ -891,14 +1084,15 @@ class LDAPPolicyReader:
                         if hasattr(entry, "pwdMaxFailure"):
                             policy.lockout_threshold = int(entry.pwdMaxFailure.value)
                         if hasattr(entry, "pwdLockoutDuration"):
-                            # LDAP stores in seconds, convert to minutes
-                            policy.lockout_duration_minutes = int(entry.pwdLockoutDuration.value) // 60
+                            # Convert seconds to minutes
+                            policy.lockout_duration_minutes = \
+                                int(entry.pwdLockoutDuration.value) // 60
                         
-                        logger.info(f"Found LDAP password policy in {search_base}")
+                        logger.info(f"Found LDAP policy in {search_base}")
                         break
                         
                 except Exception as e:
-                    logger.debug(f"No policy found in {search_base}: {e}")
+                    logger.debug(f"No policy in {search_base}: {e}")
                     continue
             
             conn.unbind()
@@ -914,7 +1108,7 @@ class LDAPPolicyReader:
 # =============================================================================
 
 def create_parser() -> argparse.ArgumentParser:
-    """Create the argument parser for CLI."""
+    """Create argument parser for CLI interface."""
     parser = argparse.ArgumentParser(
         description="SecuriSphere Password Policy Auditor",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -931,6 +1125,16 @@ Examples:
 
   # Output results to file
   python auditor.py --config policy.conf --output audit_results.json
+
+Simulation:
+  # Create a sample policy config:
+  echo "minlen=8
+  require_upper=yes
+  max_age=90
+  lockout_threshold=5" > /tmp/password.conf
+  
+  # Audit it:
+  python auditor.py --config /tmp/password.conf
         """
     )
     
@@ -975,13 +1179,13 @@ Examples:
     parser.add_argument(
         "--verbose", "-v",
         action="store_true",
-        help="Enable verbose logging"
+        help="Enable verbose/debug logging"
     )
     
     return parser
 
 
-def main():
+def main() -> None:
     """Main entry point for CLI."""
     parser = create_parser()
     args = parser.parse_args()
@@ -989,13 +1193,18 @@ def main():
     # Configure logging level
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
+        logger.debug("Verbose logging enabled")
     
     # Validate LDAP arguments
     if args.ldap_uri and not args.base_dn:
         parser.error("--base-dn is required when using --ldap-uri")
     
     # Initialize auditor
-    auditor = PasswordPolicyAuditor(standard=args.standard)
+    try:
+        auditor = PasswordPolicyAuditor(standard=args.standard)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
     
     try:
         # Get policy from config or LDAP
@@ -1013,6 +1222,7 @@ def main():
             policy = ldap_reader.read_policy()
             
             if policy is None:
+                logger.error("Failed to read policy from LDAP")
                 print("Error: Failed to read policy from LDAP", file=sys.stderr)
                 sys.exit(1)
             
@@ -1057,6 +1267,7 @@ def main():
         sys.exit(0 if result.compliant else 1)
         
     except FileNotFoundError as e:
+        logger.error(str(e))
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
     except Exception as e:
@@ -1064,6 +1275,10 @@ def main():
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
+
+# =============================================================================
+# Demo Run
+# =============================================================================
 
 if __name__ == "__main__":
     main()
