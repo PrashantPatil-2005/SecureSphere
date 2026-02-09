@@ -9,5 +9,6 @@ Available modules:
 """
 
 from . import network
+from . import password
 
-__all__ = ["network"]
+__all__ = ["network", "password"]
