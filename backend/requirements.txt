@@ -1,0 +1,21 @@
+# =============================================================================
+# SecuriSphere - Phase 3: Backend Dependencies
+# =============================================================================
+# Install with: pip install -r backend/requirements.txt
+# =============================================================================
+
+# Web framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+
+# Database
+sqlalchemy>=2.0.0
+
+# Data validation
+pydantic>=2.0.0
+
+# Scheduler (optional periodic correlation)
+apscheduler>=3.10.0
+
+# HTTP client (for submit_sample_alerts.py)
+requests>=2.31.0
