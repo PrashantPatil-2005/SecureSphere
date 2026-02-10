@@ -1,57 +1,80 @@
 #!/usr/bin/env python3
 # =============================================================================
-# SecuriSphere - Phase 3: Correlation Engine
+# SecuriSphere — Phase 3: Correlation Engine
 # =============================================================================
-"""
-Core correlation engine that analyzes incoming alerts and groups them
-into higher-severity "incidents" using 5 configurable detection rules.
-
-Design philosophy:
-    - Rules are hardcoded but structured for easy extension
-    - Each rule returns a list of new incidents (or empty list)
-    - Duplicate incidents for the same alert combination are prevented
-    - Each alert participates in AT MOST ONE incident per rule
-      (closest-match / best-pair strategy to avoid noise)
-    - Human-readable "story" field explains every escalation
-
-Correlation Rules:
-    Rule 1: Credential Abuse Likely
-    Rule 2: Recon + Active Exploitation
-    Rule 3: Multi-Signal Attack in Progress
-    Rule 4: API Takeover Attempt  
-    Rule 5: Identity Compromise Risk
-"""
+#
+#  ╔══════════════════════════════════════════════════════════════════╗
+#  ║  WHAT THIS FILE DOES                                           ║
+#  ║  ──────────────────                                            ║
+#  ║  1. Pulls recent alerts from the DB (last 30 minutes)          ║
+#  ║  2. Runs 5 correlation rules against them                      ║
+#  ║  3. Creates Incident objects with:                              ║
+#  ║     • Escalated severity  (e.g. medium+medium → critical)      ║
+#  ║     • Human-readable "story" (natural-language explanation)     ║
+#  ║     • Grouped alert IDs                                        ║
+#  ║  4. Saves new incidents to the database                        ║
+#  ║  5. Returns the list of newly created Incidents                ║
+#  ╚══════════════════════════════════════════════════════════════════╝
+#
+#  CORRELATION RULES AT A GLANCE
+#  ─────────────────────────────
+#  Rule 1 │ Credential Abuse Likely
+#         │ Weak password + network anomaly on same asset → CRITICAL
+#  Rule 2 │ Recon + Active Exploitation
+#         │ Network scanning + API vulnerability on same asset → CRITICAL
+#  Rule 3 │ Multi-Signal Attack in Progress
+#         │ 3+ medium/high alerts on same asset in 15 min → CRITICAL
+#  Rule 4 │ API Takeover Attempt
+#         │ API auth flaw + brute-force network traffic → CRITICAL
+#  Rule 5 │ Identity Compromise Risk
+#         │ Weak password + login from new IP address → HIGH
+#
+#  DESIGN CHOICES (student notes)
+#  ──────────────────────────────
+#  • Pure Python loops — no pandas needed, easy to debug
+#  • "Best match" pairing — each alert matches its CLOSEST partner
+#    (prevents the N×M explosion of incidents)
+#  • Superset dedup — if multi-signal group grows, old subset is replaced
+#  • Every function is heavily commented for readability
+# =============================================================================
 
 import logging
 import uuid
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set
 
 from sqlalchemy.orm import Session
 
 from backend.database import AlertRecord, IncidentRecord, incident_alerts
 from backend.models import SEVERITY_ORDER, max_severity, severity_gte
 
-# =============================================================================
-# Logging
-# =============================================================================
+
+# ─── Logger ──────────────────────────────────────────────────────────────────
 logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# Helper Functions
+#  HELPER FUNCTIONS  (small utilities used by the rules below)
 # =============================================================================
-def _parse_timestamp(ts_str: str) -> Optional[datetime]:
+
+def parse_timestamp(ts_str: str) -> Optional[datetime]:
     """
-    Parse an ISO 8601 timestamp string into a datetime object.
-    Handles multiple common formats gracefully.
+    Convert an ISO-8601 timestamp string → Python datetime.
+
+    We try several common formats because modules may send timestamps in
+    slightly different shapes.  Returns None if nothing works.
+
+    Example:
+        >>> parse_timestamp("2026-02-10T07:00:00")
+        datetime.datetime(2026, 2, 10, 7, 0)
     """
-    for fmt in (
-        "%Y-%m-%dT%H:%M:%S.%f",
-        "%Y-%m-%dT%H:%M:%S",
-        "%Y-%m-%d %H:%M:%S.%f",
-        "%Y-%m-%d %H:%M:%S",
-    ):
+    formats = [
+        "%Y-%m-%dT%H:%M:%S.%f",   # 2026-02-10T07:00:00.123456
+        "%Y-%m-%dT%H:%M:%S",      # 2026-02-10T07:00:00
+        "%Y-%m-%d %H:%M:%S.%f",   # 2026-02-10 07:00:00.123456
+        "%Y-%m-%d %H:%M:%S",      # 2026-02-10 07:00:00
+    ]
+    for fmt in formats:
         try:
             return datetime.strptime(ts_str, fmt)
         except ValueError:
@@ -60,41 +83,72 @@ def _parse_timestamp(ts_str: str) -> Optional[datetime]:
     return None
 
 
-def _time_gap(alert_a: AlertRecord, alert_b: AlertRecord) -> timedelta:
-    """Return the absolute time gap between two alerts (or a large value on error)."""
-    ts_a = _parse_timestamp(alert_a.timestamp)
-    ts_b = _parse_timestamp(alert_b.timestamp)
+def time_gap_between(alert_a: AlertRecord, alert_b: AlertRecord) -> timedelta:
+    """
+    Calculate the absolute time difference between two alerts.
+    Returns a very large value (999 days) if either timestamp is unparseable,
+    so the pair will never be considered "within window".
+    """
+    ts_a = parse_timestamp(alert_a.timestamp)
+    ts_b = parse_timestamp(alert_b.timestamp)
     if ts_a is None or ts_b is None:
-        return timedelta(days=999)
+        return timedelta(days=999)       # effectively "infinite" gap
     return abs(ts_a - ts_b)
 
 
-def _alerts_within_window(
+def are_within_window(
     alert_a: AlertRecord,
     alert_b: AlertRecord,
     window_minutes: int = 10,
 ) -> bool:
-    """Check if two alerts occurred within `window_minutes` of each other."""
-    return _time_gap(alert_a, alert_b) <= timedelta(minutes=window_minutes)
+    """
+    Check if two alerts happened within `window_minutes` of each other.
+
+    Example:
+        If alert_a.timestamp = "07:00" and alert_b.timestamp = "07:08",
+        are_within_window(a, b, window_minutes=10) → True  (8 min < 10 min)
+    """
+    return time_gap_between(alert_a, alert_b) <= timedelta(minutes=window_minutes)
 
 
-def _get_existing_alert_sets(db: Session) -> Set[frozenset]:
+def get_recent_alerts(db: Session, minutes: int = 30) -> List[AlertRecord]:
     """
-    Get all existing (incident → alert) sets to prevent duplicate incidents.
-    Returns a set of frozensets of alert IDs already grouped.
+    Fetch alerts from the last `minutes` minutes.
+
+    This is the INPUT to the engine — we only correlate recent activity,
+    not the entire history, to keep things fast and relevant.
     """
-    existing = set()
-    incidents = db.query(IncidentRecord).all()
-    for inc in incidents:
+    cutoff = datetime.utcnow() - timedelta(minutes=minutes)
+    cutoff_str = cutoff.isoformat()
+
+    # SQLAlchemy query: SELECT * FROM alerts WHERE timestamp >= cutoff
+    recent = (
+        db.query(AlertRecord)
+        .filter(AlertRecord.timestamp >= cutoff_str)
+        .order_by(AlertRecord.timestamp.asc())
+        .all()
+    )
+    logger.info("Fetched %d alerts from the last %d minutes", len(recent), minutes)
+    return recent
+
+
+def get_existing_incident_sets(db: Session) -> Set[frozenset]:
+    """
+    Load every existing incident's alert-ID set so we can avoid duplicates.
+
+    For example, if incident X already groups alerts {1, 3}, we store
+    frozenset({1, 3}).  Before creating a new incident, we check
+    "is this set already in here?"  If yes → skip.
+    """
+    existing: Set[frozenset] = set()
+    for inc in db.query(IncidentRecord).all():
         alert_ids = frozenset(a.id for a in inc.alerts)
         existing.add(alert_ids)
     return existing
 
 
-def _get_existing_incidents_by_rule(
-    db: Session, rule_name: str
-) -> List[IncidentRecord]:
-    """Get all existing incidents for a specific rule."""
+def find_incidents_by_rule(db: Session, rule_name: str) -> List[IncidentRecord]:
+    """Fetch all existing incidents that were created by a specific rule."""
     return (
         db.query(IncidentRecord)
         .filter(IncidentRecord.rule_name == rule_name)
@@ -103,27 +157,31 @@ def _get_existing_incidents_by_rule(
 
 
 # =============================================================================
-# Correlation Engine
+#  THE CORRELATION ENGINE  (the main class)
 # =============================================================================
+
 class CorrelationEngine:
     """
-    Analyzes stored alerts and produces correlated incidents.
-    
-    Each rule uses a "best match" strategy: for pairwise rules, each
-    alert from one module is paired with its *closest* (in time) alert
-    from the other module. This avoids the O(n*m) explosion that would
-    occur if every possible combination were turned into an incident.
-    
-    Call `run(db)` to execute all rules against the current alert database.
-    New incidents are persisted automatically.
-    
-    Usage:
+    Central brain of Phase 3.
+
+    How to use:
         engine = CorrelationEngine()
         new_incidents = engine.run(db_session)
+        # new_incidents is a list of IncidentRecord objects just created
+
+    How it works internally:
+        1. Pull recent alerts (last 30 min) from the database
+        2. Load already-existing incidents (to avoid duplicates)
+        3. Loop through each rule function
+        4. Each rule returns a list of new IncidentRecord objects
+        5. Save them to the DB and return them
     """
 
     def __init__(self) -> None:
-        # Registry of all correlation rules — add new rules here
+        """
+        Register all five correlation rules.
+        To add a new rule, simply append another method to this list.
+        """
         self.rules = [
             self.rule_1_credential_abuse,
             self.rule_2_recon_exploitation,
@@ -132,74 +190,102 @@ class CorrelationEngine:
             self.rule_5_identity_compromise,
         ]
 
+    # ─────────────────────────────────────────────────────────────────────────
+    #  run()  — the main entry point
+    # ─────────────────────────────────────────────────────────────────────────
     def run(self, db: Session) -> List[IncidentRecord]:
         """
-        Execute all correlation rules and persist any new incidents.
-        
-        Args:
-            db: Active SQLAlchemy session
-            
-        Returns:
-            List of newly created IncidentRecord objects
+        Execute ALL correlation rules and return newly created incidents.
+
+        Steps:
+            1. Fetch recent alerts from the database (last 30 minutes)
+            2. Load existing incident sets to prevent duplicates
+            3. Run each rule → collect new IncidentRecords
+            4. Persist to DB and return the list
         """
         logger.info("=" * 60)
-        logger.info("CORRELATION ENGINE: Starting analysis run")
+        logger.info("CORRELATION ENGINE — Starting analysis run")
         logger.info("=" * 60)
 
-        all_alerts = db.query(AlertRecord).all()
-        logger.info("Total alerts in database: %d", len(all_alerts))
+        # ── Step 1: Get recent alerts ────────────────────────────────────
+        all_alerts = get_recent_alerts(db, minutes=30)
+        logger.info("Total recent alerts to analyse: %d", len(all_alerts))
 
-        existing_sets = _get_existing_alert_sets(db)
+        if not all_alerts:
+            logger.info("No recent alerts — nothing to correlate.")
+            return []
+
+        # ── Step 2: Load existing incidents ──────────────────────────────
+        existing_sets = get_existing_incident_sets(db)
         new_incidents: List[IncidentRecord] = []
 
+        # ── Step 3: Run each rule ────────────────────────────────────────
         for rule_func in self.rules:
             rule_name = rule_func.__name__
             logger.info("Running rule: %s", rule_name)
+
             try:
-                # Rule 3 gets a db reference for superset deduplication
+                # Rule 3 needs a DB reference for superset deduplication
                 if rule_name == "rule_3_multi_signal_attack":
-                    incidents = rule_func(all_alerts, existing_sets, _db=db)
+                    incidents = rule_func(all_alerts, existing_sets, db=db)
                 else:
                     incidents = rule_func(all_alerts, existing_sets)
+
+                # ── Step 4: Persist each new incident ────────────────────
                 for inc in incidents:
                     db.add(inc)
-                    db.flush()
+                    db.flush()   # flush so the incident gets an ID
                     alert_ids = frozenset(a.id for a in inc.alerts)
                     existing_sets.add(alert_ids)
                     new_incidents.append(inc)
                     logger.info(
                         "  → NEW INCIDENT: %s | severity=%s | alerts=%s",
-                        inc.rule_name, inc.severity,
-                        [a.id for a in inc.alerts]
+                        inc.rule_name,
+                        inc.severity,
+                        [a.id for a in inc.alerts],
                     )
             except Exception as e:
-                logger.error("Error in rule %s: %s", rule_name, e, exc_info=True)
+                logger.error("Error in %s: %s", rule_name, e, exc_info=True)
 
+        # Save everything to disk
         db.commit()
 
         logger.info(
-            "CORRELATION ENGINE: Complete — %d new incidents created",
-            len(new_incidents)
+            "CORRELATION ENGINE — Complete: %d new incident(s) created",
+            len(new_incidents),
         )
         return new_incidents
 
-    # =========================================================================
-    # RULE 1: Credential Abuse Likely
-    # =========================================================================
-    # TRIGGER: Password alert (severity >= medium) AND the *closest* network
-    #          anomaly on the SAME asset within a 10-minute window.
-    # RATIONALE: Weak/compromised credentials combined with abnormal
-    #            network activity suggest active credential abuse.
-    # One incident per password alert (closest network match).
-    # =========================================================================
+
+    # =====================================================================
+    #  RULE 1 — Credential Abuse Likely
+    # =====================================================================
+    #
+    #  TRIGGER:
+    #      Password policy alert  (severity >= medium)
+    #      +  Network anomaly     (any severity)
+    #      →  on the SAME asset, within 10 minutes
+    #
+    #  WHY IT MATTERS:
+    #      Weak or compromised passwords PLUS abnormal network traffic
+    #      strongly suggest someone is actively using stolen credentials.
+    #
+    #  ESCALATED SEVERITY:  critical
+    #
+    # =====================================================================
     def rule_1_credential_abuse(
         self,
         alerts: List[AlertRecord],
         existing: Set[frozenset],
     ) -> List[IncidentRecord]:
-        incidents = []
-        used_net_ids: Set[int] = set()  # Track used network alerts
+        """
+        Pair each password alert with its CLOSEST network anomaly.
+        "Closest" = smallest time gap.  One incident per password alert.
+        """
+        incidents: List[IncidentRecord] = []
+        used_network_ids: Set[int] = set()   # track which network alerts are taken
 
+        # ── Step A: Filter alerts by module ──────────────────────────────
         password_alerts = [
             a for a in alerts
             if a.module == "password" and severity_gte(a.severity, "medium")
@@ -209,152 +295,212 @@ class CorrelationEngine:
             if a.module == "network"
         ]
 
+        # ── Step B: For each password alert, find the BEST network match ─
         for pwd_alert in password_alerts:
-            # Find the closest network alert on the same asset within 10 min
-            best_net = None
+            best_match = None
             best_gap = timedelta(days=999)
+
             for net_alert in network_alerts:
-                if net_alert.id in used_net_ids:
+                # Skip if this network alert is already used in this rule
+                if net_alert.id in used_network_ids:
                     continue
+                # Must be on the same asset
                 if pwd_alert.asset != net_alert.asset:
                     continue
-                gap = _time_gap(pwd_alert, net_alert)
+                # Must be within 10 minutes
+                gap = time_gap_between(pwd_alert, net_alert)
                 if gap <= timedelta(minutes=10) and gap < best_gap:
                     best_gap = gap
-                    best_net = net_alert
+                    best_match = net_alert
 
-            if best_net is None:
+            # No matching network alert found?  Skip this password alert.
+            if best_match is None:
                 continue
 
-            pair = frozenset([pwd_alert.id, best_net.id])
+            # ── Step C: Check for duplicates ─────────────────────────────
+            pair = frozenset([pwd_alert.id, best_match.id])
             if pair in existing:
-                continue
+                continue   # Already created in a previous run
 
-            used_net_ids.add(best_net.id)
+            # Mark the network alert as "used" so it doesn't pair again
+            used_network_ids.add(best_match.id)
+
+            # ── Step D: Build the Incident ───────────────────────────────
+            story = (
+                f"🔴 CRITICAL — Credential Abuse Likely\n"
+                f"\n"
+                f"What happened:\n"
+                f"  • A weak/compromised password policy was flagged "
+                f"(alert #{pwd_alert.id}, severity: {pwd_alert.severity})\n"
+                f"  • Abnormal network traffic was detected "
+                f"(alert #{best_match.id}, severity: {best_match.severity})\n"
+                f"  • Both events hit the SAME asset: '{pwd_alert.asset}'\n"
+                f"  • Time gap between events: {best_gap.total_seconds():.0f} seconds\n"
+                f"\n"
+                f"Why this is critical:\n"
+                f"  An attacker likely obtained valid credentials through "
+                f"policy weaknesses and is now conducting unauthorized access. "
+                f"The network anomaly may represent data exfiltration or "
+                f"lateral movement using the compromised account.\n"
+                f"\n"
+                f"Recommended action:\n"
+                f"  Immediately rotate credentials on '{pwd_alert.asset}', "
+                f"enable MFA, and review access logs for unauthorised sessions."
+            )
 
             inc = IncidentRecord(
                 incident_id=str(uuid.uuid4()),
                 rule_name="Credential Abuse Likely",
                 severity="critical",
-                story=(
-                    f"🔴 CRITICAL — Credential Abuse Likely\n"
-                    f"A weak/compromised password policy (alert #{pwd_alert.id}, "
-                    f"severity: {pwd_alert.severity}) was detected alongside "
-                    f"abnormal network traffic (alert #{best_net.id}) on asset "
-                    f"'{pwd_alert.asset}' within a 10-minute window.\n"
-                    f"This combination strongly suggests that compromised "
-                    f"credentials are being actively exploited. An attacker "
-                    f"may have obtained valid credentials through policy "
-                    f"weaknesses and is now conducting unauthorized access."
-                ),
-                alerts=[pwd_alert, best_net],
+                story=story,
+                alerts=[pwd_alert, best_match],
             )
             incidents.append(inc)
+
         return incidents
 
-    # =========================================================================
-    # RULE 2: Recon + Active Exploitation
-    # =========================================================================
-    # TRIGGER: Network anomaly AND API vulnerability on the SAME asset.
-    # RATIONALE: Network scanning/probing followed by API vulnerability
-    #            exploitation indicates a multi-stage attack.
-    # One incident per API alert (closest network match).
-    # =========================================================================
+
+    # =====================================================================
+    #  RULE 2 — Recon + Active Exploitation
+    # =====================================================================
+    #
+    #  TRIGGER:
+    #      Network anomaly  (reconnaissance / scanning activity)
+    #      +  API vulnerability  (exploitable weakness found)
+    #      →  on the SAME asset
+    #
+    #  WHY IT MATTERS:
+    #      This is the classic attack pattern: scan first, exploit second.
+    #      Network recon + an API vuln on the same target means an attacker
+    #      found weaknesses and is actively exploiting them.
+    #
+    #  ESCALATED SEVERITY:  critical
+    #
+    # =====================================================================
     def rule_2_recon_exploitation(
         self,
         alerts: List[AlertRecord],
         existing: Set[frozenset],
     ) -> List[IncidentRecord]:
-        incidents = []
-        used_net_ids: Set[int] = set()
+        """
+        Pair each API vulnerability alert with its closest network anomaly.
+        One incident per API alert.
+        """
+        incidents: List[IncidentRecord] = []
+        used_network_ids: Set[int] = set()
 
         network_alerts = [a for a in alerts if a.module == "network"]
-        api_alerts = [a for a in alerts if a.module == "api"]
+        api_alerts     = [a for a in alerts if a.module == "api"]
 
         for api_alert in api_alerts:
-            best_net = None
+            best_match = None
             best_gap = timedelta(days=999)
+
             for net_alert in network_alerts:
-                if net_alert.id in used_net_ids:
+                if net_alert.id in used_network_ids:
                     continue
                 if net_alert.asset != api_alert.asset:
                     continue
-                gap = _time_gap(api_alert, net_alert)
+                gap = time_gap_between(api_alert, net_alert)
                 if gap < best_gap:
                     best_gap = gap
-                    best_net = net_alert
+                    best_match = net_alert
 
-            if best_net is None:
+            if best_match is None:
                 continue
 
-            pair = frozenset([best_net.id, api_alert.id])
+            pair = frozenset([best_match.id, api_alert.id])
             if pair in existing:
                 continue
 
-            used_net_ids.add(best_net.id)
+            used_network_ids.add(best_match.id)
+
+            story = (
+                f"🔴 CRITICAL — Reconnaissance + Active Exploitation\n"
+                f"\n"
+                f"What happened:\n"
+                f"  • Network anomaly detected (alert #{best_match.id}) — "
+                f"likely port scanning or service enumeration\n"
+                f"  • API vulnerability found (alert #{api_alert.id}, "
+                f"type: {api_alert.type}) — an exploitable weakness\n"
+                f"  • Both target the same asset: '{best_match.asset}'\n"
+                f"\n"
+                f"Why this is critical:\n"
+                f"  This is the classic two-stage attack pattern. The attacker "
+                f"first scanned the network to discover services, then "
+                f"exploited a known API vulnerability. The combination "
+                f"indicates an active, targeted intrusion — not a random probe.\n"
+                f"\n"
+                f"Recommended action:\n"
+                f"  Patch the API vulnerability immediately, review firewall "
+                f"rules, and check for any data accessed during the window."
+            )
 
             inc = IncidentRecord(
                 incident_id=str(uuid.uuid4()),
                 rule_name="Recon + Active Exploitation",
                 severity="critical",
-                story=(
-                    f"🔴 CRITICAL — Reconnaissance + Active Exploitation\n"
-                    f"Network anomaly (alert #{best_net.id}) combined with "
-                    f"API vulnerability (alert #{api_alert.id}, "
-                    f"type: {api_alert.type}) detected on asset "
-                    f"'{best_net.asset}'.\n"
-                    f"This pattern indicates an attacker first performed "
-                    f"network reconnaissance (port scanning, service "
-                    f"enumeration) and then actively exploited discovered "
-                    f"API weaknesses. Immediate investigation recommended."
-                ),
-                alerts=[best_net, api_alert],
+                story=story,
+                alerts=[best_match, api_alert],
             )
             incidents.append(inc)
+
         return incidents
 
-    # =========================================================================
-    # RULE 3: Multi-Signal Attack in Progress
-    # =========================================================================
-    # TRIGGER: 3 or more alerts with severity >= medium on the SAME asset
-    #          within a 15-minute window.
-    # RATIONALE: Multiple medium+ signals converging on one asset
-    #            indicates a coordinated or escalating attack.
-    # Creates ONE incident per asset — the largest group in the window.
-    # =========================================================================
+
+    # =====================================================================
+    #  RULE 3 — Multi-Signal Attack in Progress
+    # =====================================================================
+    #
+    #  TRIGGER:
+    #      3 or more alerts with severity >= medium
+    #      on the SAME asset, within a 15-minute window
+    #
+    #  WHY IT MATTERS:
+    #      Multiple security signals converging on one target in a short
+    #      time = coordinated multi-vector attack (or rapid escalation).
+    #
+    #  ESCALATED SEVERITY:  max(all severities), minimum "high"
+    #
+    #  SPECIAL LOGIC:
+    #      Only ONE incident per asset (the largest group).
+    #      If a previous run created a smaller group, it's replaced.
+    #
+    # =====================================================================
     def rule_3_multi_signal_attack(
         self,
         alerts: List[AlertRecord],
         existing: Set[frozenset],
-        _db: Optional[Session] = None,
+        db: Optional[Session] = None,
     ) -> List[IncidentRecord]:
-        incidents = []
+        """
+        Find the largest cluster of medium+ alerts per asset, all within
+        a 15-minute window.  Replace smaller subsets from prior runs.
+        """
+        incidents: List[IncidentRecord] = []
 
-        # Group medium+ alerts by asset
-        asset_alerts: Dict[str, List[AlertRecord]] = {}
+        # ── Step A: Group medium+ alerts by asset ────────────────────────
+        # Example: {"victim-app:8000": [alert1, alert3, alert5, ...]}
+        asset_buckets: Dict[str, List[AlertRecord]] = {}
         for a in alerts:
             if severity_gte(a.severity, "medium"):
-                asset_alerts.setdefault(a.asset, []).append(a)
+                asset_buckets.setdefault(a.asset, []).append(a)
 
-        for asset, asset_alert_list in asset_alerts.items():
-            if len(asset_alert_list) < 3:
-                continue
+        # ── Step B: For each asset, find the biggest 15-min group ────────
+        for asset, bucket in asset_buckets.items():
+            if len(bucket) < 3:
+                continue  # Need at least 3 alerts to trigger
 
-            # Sort by timestamp
-            sorted_alerts = sorted(
-                asset_alert_list,
-                key=lambda a: _parse_timestamp(a.timestamp) or datetime.min
-            )
+            # Sort by time so we can do a sliding-window scan
+            bucket.sort(key=lambda a: parse_timestamp(a.timestamp) or datetime.min)
 
-            # Find the LARGEST group within a 15-minute window
+            # Sliding window: anchor on each alert, extend as far as 15 min allows
             best_group: List[AlertRecord] = []
-            for i in range(len(sorted_alerts)):
-                group = [sorted_alerts[i]]
-                for j in range(i + 1, len(sorted_alerts)):
-                    if _alerts_within_window(
-                        sorted_alerts[i], sorted_alerts[j], window_minutes=15
-                    ):
-                        group.append(sorted_alerts[j])
+            for i in range(len(bucket)):
+                group = [bucket[i]]
+                for j in range(i + 1, len(bucket)):
+                    if are_within_window(bucket[i], bucket[j], window_minutes=15):
+                        group.append(bucket[j])
                 if len(group) > len(best_group):
                     best_group = group
 
@@ -363,71 +509,100 @@ class CorrelationEngine:
 
             new_ids = frozenset(a.id for a in best_group)
             if new_ids in existing:
-                continue
+                continue   # Exact same group already exists
 
-            # ---- Superset deduplication ----
-            # If this new group is a strict superset of an existing
-            # multi-signal incident, remove the old (smaller) incident
-            # and replace it with the new (larger) one.
-            if _db is not None:
-                old_incidents = _get_existing_incidents_by_rule(
-                    _db, "Multi-Signal Attack in Progress"
+            # ── Step C: Superset deduplication ───────────────────────────
+            # If this new group is BIGGER than an old multi-signal incident,
+            # delete the old one (it's a strict subset).
+            if db is not None:
+                old_incidents = find_incidents_by_rule(
+                    db, "Multi-Signal Attack in Progress"
                 )
                 for old_inc in old_incidents:
                     old_ids = frozenset(a.id for a in old_inc.alerts)
-                    if old_ids < new_ids:  # strict subset
+                    if old_ids < new_ids:      # old is a strict subset
                         logger.info(
-                            "  Replacing subset incident %s (%s) with larger group",
-                            old_inc.incident_id[:8], sorted(old_ids)
+                            "  Replacing old subset incident %s (alerts %s) "
+                            "with larger group (alerts %s)",
+                            old_inc.incident_id[:8],
+                            sorted(old_ids),
+                            sorted(new_ids),
                         )
                         existing.discard(old_ids)
-                        _db.delete(old_inc)
-                _db.flush()
+                        db.delete(old_inc)
+                db.flush()
 
+            # ── Step D: Build the incident ───────────────────────────────
             modules_involved = sorted(set(a.module for a in best_group))
             severities = [a.severity for a in best_group]
             escalated = max_severity(*severities)
+            # Floor at "high" — 3+ signals always warrants at least HIGH
             if SEVERITY_ORDER.get(escalated, 0) < SEVERITY_ORDER["high"]:
                 escalated = "high"
+
+            story = (
+                f"🟠 {escalated.upper()} — Multi-Signal Attack Detected\n"
+                f"\n"
+                f"What happened:\n"
+                f"  • {len(best_group)} security alerts fired on asset "
+                f"'{asset}' within a 15-minute window\n"
+                f"  • Modules involved: {', '.join(modules_involved)}\n"
+                f"  • Severity levels: {', '.join(severities)}\n"
+                f"  • Alert IDs: {[a.id for a in best_group]}\n"
+                f"\n"
+                f"Why this is {escalated}:\n"
+                f"  Multiple independent security signals converging on "
+                f"the same asset in a short timeframe is a strong indicator "
+                f"of a coordinated attack. The attacker may be launching a "
+                f"multi-vector assault targeting network, API, and "
+                f"credential layers simultaneously.\n"
+                f"\n"
+                f"Recommended action:\n"
+                f"  Initiate incident response. Isolate the affected asset, "
+                f"review all {len(best_group)} alerts in sequence, and "
+                f"determine the attack timeline."
+            )
 
             inc = IncidentRecord(
                 incident_id=str(uuid.uuid4()),
                 rule_name="Multi-Signal Attack in Progress",
                 severity=escalated,
-                story=(
-                    f"🟠 {escalated.upper()} — Multi-Signal Attack Detected\n"
-                    f"{len(best_group)} alerts (severity: {', '.join(severities)}) "
-                    f"detected on asset '{asset}' within a 15-minute window.\n"
-                    f"Modules involved: {', '.join(modules_involved)}.\n"
-                    f"Alert IDs: {[a.id for a in best_group]}.\n"
-                    f"Multiple security signals converging on the same asset "
-                    f"in a short timeframe indicates a coordinated or "
-                    f"escalating attack. This may be a multi-vector assault "
-                    f"targeting different layers of the application."
-                ),
+                story=story,
                 alerts=list(best_group),
             )
             incidents.append(inc)
+
         return incidents
 
-    # =========================================================================
-    # RULE 4: API Takeover Attempt
-    # =========================================================================
-    # TRIGGER: API broken authentication alert AND network alert indicating
-    #          high-volume failed login attempts (severity >= medium).
-    # RATIONALE: Broken auth endpoints combined with brute-force network
-    #            traffic strongly suggest an API takeover attempt.
-    # One incident per API auth alert (closest network match).
-    # =========================================================================
+
+    # =====================================================================
+    #  RULE 4 — API Takeover Attempt
+    # =====================================================================
+    #
+    #  TRIGGER:
+    #      API authentication vulnerability alert
+    #      +  Network alert with severity >= medium (brute-force traffic)
+    #      →  on the SAME asset
+    #
+    #  WHY IT MATTERS:
+    #      Broken auth + brute-force = someone is actively trying to
+    #      take over the API by exploiting weak authentication.
+    #
+    #  ESCALATED SEVERITY:  critical
+    #
+    # =====================================================================
     def rule_4_api_takeover(
         self,
         alerts: List[AlertRecord],
         existing: Set[frozenset],
     ) -> List[IncidentRecord]:
-        incidents = []
-        used_net_ids: Set[int] = set()
+        """
+        Pair each API auth alert with the closest medium+ network alert.
+        """
+        incidents: List[IncidentRecord] = []
+        used_network_ids: Set[int] = set()
 
-        # API alerts related to authentication issues
+        # API alerts about authentication problems
         api_auth_alerts = [
             a for a in alerts
             if a.module == "api" and (
@@ -436,121 +611,158 @@ class CorrelationEngine:
                 or "security_scan" in a.type.lower()
             )
         ]
-        # Network alerts showing high-volume / failed login patterns
-        network_login_alerts = [
+        # Network alerts showing brute-force / high-volume patterns
+        network_bruteforce_alerts = [
             a for a in alerts
             if a.module == "network" and severity_gte(a.severity, "medium")
         ]
 
         for api_alert in api_auth_alerts:
-            best_net = None
+            best_match = None
             best_gap = timedelta(days=999)
-            for net_alert in network_login_alerts:
-                if net_alert.id in used_net_ids:
+
+            for net_alert in network_bruteforce_alerts:
+                if net_alert.id in used_network_ids:
                     continue
                 if api_alert.asset != net_alert.asset:
                     continue
-                gap = _time_gap(api_alert, net_alert)
+                gap = time_gap_between(api_alert, net_alert)
                 if gap < best_gap:
                     best_gap = gap
-                    best_net = net_alert
+                    best_match = net_alert
 
-            if best_net is None:
+            if best_match is None:
                 continue
 
-            pair = frozenset([api_alert.id, best_net.id])
+            pair = frozenset([api_alert.id, best_match.id])
             if pair in existing:
                 continue
 
-            used_net_ids.add(best_net.id)
+            used_network_ids.add(best_match.id)
+
+            story = (
+                f"🔴 CRITICAL — API Takeover Attempt\n"
+                f"\n"
+                f"What happened:\n"
+                f"  • API broken authentication vulnerability detected "
+                f"(alert #{api_alert.id})\n"
+                f"  • High-volume network activity suggesting brute-force "
+                f"login attempts (alert #{best_match.id})\n"
+                f"  • Both on asset: '{api_alert.asset}'\n"
+                f"\n"
+                f"Why this is critical:\n"
+                f"  An attacker is exploiting weak authentication mechanisms "
+                f"while simultaneously running credential stuffing or "
+                f"brute-force attacks against the API endpoints. This is "
+                f"an active takeover attempt, not passive scanning.\n"
+                f"\n"
+                f"Recommended action:\n"
+                f"  Lock down authentication endpoints, enable rate limiting, "
+                f"rotate API keys and credentials, and review access logs "
+                f"for any successful unauthorized logins."
+            )
 
             inc = IncidentRecord(
                 incident_id=str(uuid.uuid4()),
                 rule_name="API Takeover Attempt",
                 severity="critical",
-                story=(
-                    f"🔴 CRITICAL — API Takeover Attempt\n"
-                    f"API broken authentication vulnerability "
-                    f"(alert #{api_alert.id}) detected alongside "
-                    f"high-volume network activity suggesting brute-force "
-                    f"login attempts (alert #{best_net.id}) on asset "
-                    f"'{api_alert.asset}'.\n"
-                    f"An attacker is likely exploiting weak authentication "
-                    f"mechanisms while simultaneously conducting credential "
-                    f"stuffing or brute-force attacks against the API. "
-                    f"Immediate lockdown and credential rotation recommended."
-                ),
-                alerts=[api_alert, best_net],
+                story=story,
+                alerts=[api_alert, best_match],
             )
             incidents.append(inc)
+
         return incidents
 
-    # =========================================================================
-    # RULE 5: Identity Compromise Risk
-    # =========================================================================
-    # TRIGGER: Weak password policy alert AND network alert specifically
-    #          of type "new_ip_login" or "unusual_access" on the same asset.
-    # RATIONALE: Weak credentials + new-IP login = identity compromise.
-    # Narrower than Rule 1: requires a NEW IP event, not just any anomaly.
-    # One incident per password alert (closest new-IP match).
-    # =========================================================================
+
+    # =====================================================================
+    #  RULE 5 — Identity Compromise Risk
+    # =====================================================================
+    #
+    #  TRIGGER:
+    #      Any password policy alert
+    #      +  Network alert of type "new_ip_login" or "unusual_access"
+    #      →  on the SAME asset
+    #
+    #  WHY IT MATTERS:
+    #      If the password is weak AND someone logs in from a brand-new
+    #      IP address, the account is likely compromised.
+    #
+    #  NOTE:  This is narrower than Rule 1.  Rule 1 matches any network
+    #         anomaly; Rule 5 specifically requires a "new IP" event.
+    #
+    #  ESCALATED SEVERITY:  high
+    #
+    # =====================================================================
     def rule_5_identity_compromise(
         self,
         alerts: List[AlertRecord],
         existing: Set[frozenset],
     ) -> List[IncidentRecord]:
-        incidents = []
-        used_net_ids: Set[int] = set()
+        """
+        Pair each password alert with the closest new-IP network alert.
+        """
+        incidents: List[IncidentRecord] = []
+        used_network_ids: Set[int] = set()
 
-        password_alerts = [
-            a for a in alerts if a.module == "password"
-        ]
-        # Only new-IP / unusual access network alerts (NOT generic anomalies)
+        password_alerts = [a for a in alerts if a.module == "password"]
+
+        # Only match network alerts that specifically indicate a new IP login
         new_ip_alerts = [
             a for a in alerts
-            if a.module == "network" and a.type in (
-                "new_ip_login", "unusual_access"
-            )
+            if a.module == "network"
+            and a.type in ("new_ip_login", "unusual_access")
         ]
 
         for pwd_alert in password_alerts:
-            best_net = None
+            best_match = None
             best_gap = timedelta(days=999)
+
             for net_alert in new_ip_alerts:
-                if net_alert.id in used_net_ids:
+                if net_alert.id in used_network_ids:
                     continue
                 if pwd_alert.asset != net_alert.asset:
                     continue
-                gap = _time_gap(pwd_alert, net_alert)
+                gap = time_gap_between(pwd_alert, net_alert)
                 if gap < best_gap:
                     best_gap = gap
-                    best_net = net_alert
+                    best_match = net_alert
 
-            if best_net is None:
+            if best_match is None:
                 continue
 
-            pair = frozenset([pwd_alert.id, best_net.id])
+            pair = frozenset([pwd_alert.id, best_match.id])
             if pair in existing:
                 continue
 
-            used_net_ids.add(best_net.id)
+            used_network_ids.add(best_match.id)
+
+            story = (
+                f"🟠 HIGH — Identity Compromise Risk\n"
+                f"\n"
+                f"What happened:\n"
+                f"  • Weak password policy detected (alert #{pwd_alert.id})\n"
+                f"  • Login from a new/unusual IP address "
+                f"(alert #{best_match.id}, type: {best_match.type})\n"
+                f"  • Both on asset: '{pwd_alert.asset}'\n"
+                f"\n"
+                f"Why this is high severity:\n"
+                f"  A weak password makes credentials easy to guess or "
+                f"brute-force.  When combined with a login from an "
+                f"unrecognised IP address, this strongly suggests that "
+                f"a user's account has been compromised by an external actor.\n"
+                f"\n"
+                f"Recommended action:\n"
+                f"  Enforce MFA immediately, force a password rotation, "
+                f"and investigate the login source IP for geo-location anomalies."
+            )
 
             inc = IncidentRecord(
                 incident_id=str(uuid.uuid4()),
                 rule_name="Identity Compromise Risk",
                 severity="high",
-                story=(
-                    f"🟠 HIGH — Identity Compromise Risk\n"
-                    f"Weak password policy (alert #{pwd_alert.id}) "
-                    f"combined with a login from a new/unusual IP address "
-                    f"(alert #{best_net.id}) on asset '{pwd_alert.asset}'.\n"
-                    f"A weak password policy makes credentials easier to "
-                    f"guess or brute-force. When combined with access from "
-                    f"an unrecognized source, this pattern suggests that "
-                    f"a user's identity may have been compromised. "
-                    f"Recommend enforcing MFA and password rotation."
-                ),
-                alerts=[pwd_alert, best_net],
+                story=story,
+                alerts=[pwd_alert, best_match],
             )
             incidents.append(inc)
+
         return incidents
