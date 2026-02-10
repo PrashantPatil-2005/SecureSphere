@@ -339,7 +339,7 @@ def get_sample_alerts() -> List[Dict[str, Any]]:
             "severity": "medium",
             "timestamp": (now - timedelta(minutes=20)).isoformat(),
             "asset": "victim-app:8000",
-            "details": {"source_ip": "192.168.1.100", "conn_count": 312, "baseline_count": 45, "anomaly_type": "port_scan"},
+            "details": {"source_ip": "192.168.1.100", "conn_count": 312, "baseline_count": 45, "anomaly_type": "port_scan", "protocol": "TCP"},
             "created_at": (now - timedelta(minutes=20)).isoformat()
         },
         {
@@ -369,7 +369,7 @@ def get_sample_alerts() -> List[Dict[str, Any]]:
             "severity": "high",
             "timestamp": (now - timedelta(minutes=12)).isoformat(),
             "asset": "victim-app:8000",
-            "details": {"source_ip": "192.168.1.100", "conn_count": 1523, "baseline_count": 45, "anomaly_type": "brute_force"},
+            "details": {"source_ip": "192.168.1.100", "conn_count": 1523, "baseline_count": 45, "anomaly_type": "brute_force", "protocol": "HTTP"},
             "created_at": (now - timedelta(minutes=12)).isoformat()
         },
         {
@@ -409,7 +409,7 @@ def get_sample_alerts() -> List[Dict[str, Any]]:
             "severity": "medium",
             "timestamp": (now - timedelta(minutes=3)).isoformat(),
             "asset": "victim-app:8000",
-            "details": {"source_ip": "10.0.0.50", "conn_count": 200, "baseline_count": 30, "anomaly_type": "unusual_traffic"},
+            "details": {"source_ip": "10.0.0.50", "conn_count": 200, "baseline_count": 30, "anomaly_type": "unusual_traffic", "protocol": "TCP"},
             "created_at": (now - timedelta(minutes=3)).isoformat()
         },
     ]
@@ -616,6 +616,7 @@ def generate_pdf_report(alerts: List[Dict], incidents: List[Dict], stats: Dict) 
     """
     try:
         from fpdf import FPDF
+        from fpdf.enums import XPos, YPos
         
         pdf = FPDF()
         pdf.add_page()
@@ -623,30 +624,30 @@ def generate_pdf_report(alerts: List[Dict], incidents: List[Dict], stats: Dict) 
         
         # Title
         pdf.set_font("Helvetica", "B", 20)
-        pdf.cell(0, 15, "SecuriSphere - Security Report", ln=True, align="C")
+        pdf.cell(0, 15, "SecuriSphere - Security Report", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
         pdf.set_font("Helvetica", "", 10)
-        pdf.cell(0, 8, f"Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}", ln=True, align="C")
+        pdf.cell(0, 8, f"Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
         pdf.ln(10)
         
         # Executive Summary
         pdf.set_font("Helvetica", "B", 14)
-        pdf.cell(0, 10, "Executive Summary", ln=True)
+        pdf.cell(0, 10, "Executive Summary", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.set_font("Helvetica", "", 10)
         risk = compute_risk_score(alerts, incidents)
         compliance = compute_compliance_score(alerts)
-        pdf.cell(0, 7, f"Total Alerts: {stats.get('total_alerts', len(alerts))}", ln=True)
-        pdf.cell(0, 7, f"Correlated Incidents: {stats.get('total_incidents', len(incidents))}", ln=True)
-        pdf.cell(0, 7, f"Risk Score: {risk}/100", ln=True)
-        pdf.cell(0, 7, f"Compliance Score: {compliance}/100", ln=True)
+        pdf.cell(0, 7, f"Total Alerts: {stats.get('total_alerts', len(alerts))}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.cell(0, 7, f"Correlated Incidents: {stats.get('total_incidents', len(incidents))}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.cell(0, 7, f"Risk Score: {risk}/100", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.cell(0, 7, f"Compliance Score: {compliance}/100", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.ln(8)
         
         # Incidents
         pdf.set_font("Helvetica", "B", 14)
-        pdf.cell(0, 10, "Correlated Incidents", ln=True)
+        pdf.cell(0, 10, "Correlated Incidents", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         
         for i, inc in enumerate(incidents, 1):
             pdf.set_font("Helvetica", "B", 11)
-            pdf.cell(0, 8, f"{i}. [{inc.get('severity', '').upper()}] {inc.get('rule_name', '')}", ln=True)
+            pdf.cell(0, 8, f"{i}. [{inc.get('severity', '').upper()}] {inc.get('rule_name', '')}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
             pdf.set_font("Helvetica", "", 9)
             
             story = inc.get("story", "No story available")
@@ -655,7 +656,8 @@ def generate_pdf_report(alerts: List[Dict], incidents: List[Dict], stats: Dict) 
             pdf.multi_cell(0, 5, story_clean)
             pdf.ln(5)
         
-        return pdf.output()
+        # fpdf2 returns bytearray, Streamlit needs bytes
+        return bytes(pdf.output())
     
     except ImportError:
         # Fallback if fpdf2 is not installed

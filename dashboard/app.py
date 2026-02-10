@@ -216,11 +216,14 @@ def render_overview(alerts, incidents, stats):
         """, unsafe_allow_html=True)
     
     with col2:
+        risk_color = severity_color('critical') if risk_score > 70 else severity_color('medium') if risk_score > 40 else severity_color('low')
+        risk_delta_class = 'up' if risk_score > 50 else 'down'
+        risk_delta_text = '▲ High Risk' if risk_score > 50 else '▼ Moderate'
         st.markdown(f"""
         <div class="metric-card">
-            <div class="metric-value" style="color: {severity_color('critical') if risk_score > 70 else severity_color('medium') if risk_score > 40 else severity_color('low')}">{risk_score}</div>
+            <div class="metric-value" style="color: {risk_color}">{risk_score}</div>
             <div class="metric-label">Risk Score (0-100)</div>
-            <div class="metric-delta {'up' if risk_score > 50 else 'down'}">{'▲ High Risk' if risk_score > 50 else '▼ Moderate'}</div>
+            <div class="metric-delta {risk_delta_class}">{risk_delta_text}</div>
         </div>
         """, unsafe_allow_html=True)
     
@@ -234,11 +237,14 @@ def render_overview(alerts, incidents, stats):
         """, unsafe_allow_html=True)
     
     with col4:
+        comp_color = severity_color('low') if compliance > 70 else severity_color('medium') if compliance > 40 else severity_color('high')
+        comp_delta_class = 'down' if compliance > 70 else 'up'
+        comp_delta_text = '▼ Compliant' if compliance > 70 else '▲ Needs improvement'
         st.markdown(f"""
         <div class="metric-card">
-            <div class="metric-value" style="color: {severity_color('low') if compliance > 70 else severity_color('medium') if compliance > 40 else severity_color('high')}">{compliance}%</div>
+            <div class="metric-value" style="color: {comp_color}">{compliance}%</div>
             <div class="metric-label">Compliance Score</div>
-            <div class="metric-delta {'down' if compliance > 70 else 'up'}">{'▼ Compliant' if compliance > 70 else '▲ Needs improvement'}</div>
+            <div class="metric-delta {comp_delta_class}">{comp_delta_text}</div>
         </div>
         """, unsafe_allow_html=True)
     
@@ -390,18 +396,23 @@ def render_network_timeline(alerts):
     ))
     
     # Add vertical lines for high/critical severity events
-    # NOTE: We must convert Pandas Timestamps to Python datetime objects
-    # because newer Plotly versions cannot perform arithmetic on Pandas Timestamps.
+    # NOTE: Plotly's add_vline() has a known bug with datetime x-values
+    # (TypeError: unsupported operand type(s) for +: 'int' and 'datetime').
+    # We use add_shape() with ISO string x-coordinates as a workaround.
     for _, row in anomaly_df.iterrows():
         if row.get("Severity") in ("high", "critical"):
-            # Convert Pandas Timestamp → Python datetime to avoid Plotly bug
-            x_val = row["Time"].to_pydatetime() if hasattr(row["Time"], "to_pydatetime") else row["Time"]
-            fig.add_vline(
-                x=x_val,
-                line_dash="dot",
-                line_color="rgba(239,68,68,0.4)",
-                annotation_text="⚠",
-                annotation_position="top",
+            x_str = row["Time"].isoformat() if hasattr(row["Time"], "isoformat") else str(row["Time"])
+            fig.add_shape(
+                type="line",
+                x0=x_str, x1=x_str,
+                y0=0, y1=1,
+                yref="paper",
+                line=dict(color="rgba(239,68,68,0.4)", width=1, dash="dot"),
+            )
+            fig.add_annotation(
+                x=x_str, y=1, yref="paper",
+                text="⚠", showarrow=False,
+                font=dict(size=14, color="#EF4444"),
             )
     
     fig.update_layout(
@@ -877,9 +888,9 @@ def render_risk_prioritization(alerts, incidents):
             else:
                 return "color: #10B981"
         
-        styled = risk_df.style.applymap(
+        styled = risk_df.style.map(
             color_risk, subset=["Risk Level"]
-        ).applymap(
+        ).map(
             color_score, subset=["Risk Score"]
         )
         
@@ -987,5 +998,6 @@ def main():
 # =============================================================================
 # Run the app
 # =============================================================================
-if __name__ == "__main__":
-    main()
+# NOTE: When running via `streamlit run`, __name__ is NOT "__main__".
+# We must call main() unconditionally so the dashboard renders.
+main()
