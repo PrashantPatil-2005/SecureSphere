@@ -86,3 +86,21 @@ CREATE INDEX idx_incidents_source_ip ON correlated_incidents(source_ip);
 CREATE INDEX idx_risk_entity ON risk_scores(entity_ip);
 
 CREATE INDEX idx_baseline_entity ON baseline_metrics(entity_ip, metric_name);
+
+
+-- Target Application Tables (for API Server)
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(50) NOT NULL UNIQUE,
+    email VARCHAR(100) NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    role VARCHAR(20) DEFAULT 'user',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Seed Data
+INSERT INTO users (username, email, password_hash, role) VALUES
+('admin', 'admin@example.com', 'admin123', 'admin'),
+('user1', 'user1@example.com', 'password123', 'user'),
+('user2', 'user2@example.com', 'securepass', 'user')
+ON CONFLICT DO NOTHING;
