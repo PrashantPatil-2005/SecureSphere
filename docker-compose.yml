@@ -1,165 +1,58 @@
-# =============================================================================
-# SecuriSphere - Multi-Layer Cybersecurity Monitoring Lab
-# Docker Compose Configuration
-# =============================================================================
-# This file sets up a local security lab with:
-#   - victim:   Intentionally vulnerable FastAPI application
-#   - attacker: Kali Linux with security testing tools
-#   - zeek:     Network traffic analyzer for baseline/anomaly detection
-# =============================================================================
+services:
+  redis:
+    image: redis:7.2-alpine
+    container_name: securisphere-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - securisphere-network
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
-version: '3.8'
+  database:
+    image: postgres:15-alpine
+    container_name: securisphere-db
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-securisphere_db}
+      POSTGRES_USER: ${POSTGRES_USER:-securisphere_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-securisphere_pass_2024}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - securisphere-network
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-securisphere_user} -d ${POSTGRES_DB:-securisphere_db}" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 networks:
-  labnet:
+  securisphere-network:
     driver: bridge
     ipam:
       config:
-        - subnet: 172.28.0.0/16
+        - subnet: 172.18.0.0/16
 
 volumes:
-  zeek_logs:
-    driver: local
-  victim_data:
-    driver: local
-  analyzer_output:
-    driver: local
-
-services:
-  # ===========================================================================
-  # VICTIM SERVICE
-  # Intentionally vulnerable FastAPI application for security testing
-  # ===========================================================================
-  victim:
-    build:
-      context: ./victim
-      dockerfile: Dockerfile
-    container_name: securisphere-victim
-    hostname: victim
-    networks:
-      labnet:
-        ipv4_address: 172.28.0.10
-    ports:
-      - "8000:8000"
-    volumes:
-      - ./victim/app:/app
-      - victim_data:/data
-    environment:
-      - PYTHONUNBUFFERED=1
-      - DEBUG=true
-    restart: unless-stopped
-    healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-
-  # ===========================================================================
-  # ATTACKER SERVICE
-  # Kali Linux with pre-installed security testing tools
-  # ===========================================================================
-  attacker:
-    image: kalilinux/kali-rolling
-    container_name: securisphere-attacker
-    hostname: attacker
-    networks:
-      labnet:
-        ipv4_address: 172.28.0.20
-    privileged: true
-    stdin_open: true
-    tty: true
-    volumes:
-      - ./attacker/scripts:/scripts
-      - ./attacker/wordlists:/wordlists
-    environment:
-      - VICTIM_IP=${VICTIM_IP:-172.28.0.10}
-      - VICTIM_HOST=${VICTIM_HOST:-victim}
-      - VICTIM_PORT=${VICTIM_PORT:-8000}
-      - TEST_ADMIN_USER=${TEST_ADMIN_USER:-admin}
-      - TEST_ADMIN_PASS=${TEST_ADMIN_PASS:-admin123}
-      - TEST_BACKDOOR_USER=${TEST_BACKDOOR_USER:-backdoor}
-      - TEST_BACKDOOR_PASS=${TEST_BACKDOOR_PASS:-letmein}
-    command: >
-      bash -c "
-        echo '[*] Installing security tools...' &&
-        apt-get update &&
-        apt-get install -y --no-install-recommends \
-          nmap \
-          hydra \
-          curl \
-          wget \
-          nikto \
-          dirb \
-          net-tools \
-          iputils-ping \
-          dnsutils &&
-        echo '[*] Tools installed. Attacker container ready.' &&
-        tail -f /dev/null
-      "
-    depends_on:
-      - victim
-    restart: unless-stopped
-
-  # ===========================================================================
-  # ZEEK SERVICE
-  # Network traffic analyzer - captures and logs network metadata
-  # ===========================================================================
-  zeek:
-    image: blacktop/zeek:latest
-    container_name: securisphere-zeek
-    hostname: zeek
-    networks:
-      labnet:
-        ipv4_address: 172.28.0.30
-    privileged: true
-    cap_add:
-      - NET_ADMIN
-      - NET_RAW
-    volumes:
-      - zeek_logs:/logs
-      - ./zeek/config:/usr/local/zeek/share/zeek/site
-    environment:
-      - INTERFACE=eth0
-    command: >
-      bash -c "
-        echo '[*] Starting Zeek network monitoring...' &&
-        mkdir -p /logs &&
-        cd /logs &&
-        zeek -i eth0 local &&
-        tail -f /dev/null
-      "
-    depends_on:
-      - victim
-    restart: unless-stopped
-
-  # ===========================================================================
-  # ANALYZER SERVICE
-  # Anomaly detection engine - processes Zeek logs to detect threats
-  # ===========================================================================
-  analyzer:
-    build:
-      context: ./analyzer
-      dockerfile: Dockerfile
-    container_name: securisphere-analyzer
-    hostname: analyzer
-    networks:
-      labnet:
-        ipv4_address: 172.28.0.40
-    volumes:
-      - zeek_logs:/logs:ro
-      - analyzer_output:/analyzer/output
-      - ./analyzer/src:/analyzer/src
-    environment:
-      - PYTHONUNBUFFERED=1
-      - LOG_DIR=/logs
-      - OUTPUT_DIR=/analyzer/output
-    command: >
-      bash -c "
-        echo '[*] SecuriSphere Analyzer starting...' &&
-        sleep 30 &&
-        python -m src.cli --log-dir /logs --output-dir /analyzer/output watch --interval 60
-      "
-    depends_on:
-      - zeek
-    restart: unless-stopped
+  redis-data:
+  postgres-data:

@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  redis:
+    command: redis-server --loglevel debug --requirepass "${REDIS_PASSWORD}"
+    ports:
+      - "6379:6379"
+
+  database:
+    command: postgres -c log_statement=all
+    ports:
+      - "5432:5432"

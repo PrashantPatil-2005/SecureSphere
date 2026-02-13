@@ -1,637 +1,104 @@
-﻿# 🛡️ SecuriSphere
+# SecuriSphere
+> A multi-layer cybersecurity monitoring and threat correlation framework for containerized environments.
 
+## Architecture
 
-
-## Multi-Layer Integrated Cybersecurity Monitoring System
-
-
-
-> **Phase 4: Unified Professional Dashboard Complete**
-> Full-stack cybersecurity platform with Streamlit dashboard, FastAPI backend, correlation engine, and three security modules.
-
-
-
----
-
-
-
-## 📁 Project Structure
-
-
-
+```ascii
++----------------+      +----------------+      +----------------+
+|  Monitor Layer | ---> |  Event Bus     | ---> |  Engine Layer  |
+| (Net, API, Auth)|     | (Redis Pub/Sub)|      | (Correlation)  |
++----------------+      +----------------+      +----------------+
+                                                        |
+                                                        v
++----------------+      +----------------+      +----------------+
+|   Dashboard    | <--- |    Database    | <--- |   Backend      |
+|    (React)     |      |  (PostgreSQL)  |      |    (API)       |
++----------------+      +----------------+      +----------------+
 ```
 
-securesphere/
-
-├── docker-compose.yml          # Main orchestration file
-
-├── README.md                   # This file
-
-├── DOCUMENTATION.md            # Detailed technical docs
-
-├── .gitignore                  # Git ignore rules
-
-│
-
-├── backend/                    # 🆕 Phase 3: Central Alert Hub
-
-│   ├── __init__.py
-
-│   ├── main.py                 # FastAPI app — REST API endpoints
-
-│   ├── models.py               # Pydantic schemas (AlertIn, AlertOut, IncidentOut)
-
-│   ├── database.py             # SQLite + SQLAlchemy ORM models
-
-│   ├── correlation_engine.py   # 5-rule correlation engine
-
-│   ├── scheduler.py            # APScheduler periodic correlation
-
-│   ├── requirements.txt        # Backend dependencies
-
-│   └── securisphere.db         # SQLite database (auto-generated)
-
-│
-
-├── scripts/                    # 🆕 Testing & Automation
-
-│   └── submit_sample_alerts.py # Sample alert submitter (triggers all rules)
-
-│
-
-├── modules/                    # Phase 2: Security Analysis Modules
-
-│   ├── __init__.py
-
-│   ├── network/                # Network anomaly detection
-
-│   │   ├── __init__.py
-
-│   │   └── anomaly_detector.py # IsolationForest + Z-score detection
-
-│   ├── password/               # Password policy auditing
-
-│   │   ├── __init__.py
-
-│   │   └── auditor.py          # NIST SP 800-63B compliance checker
-
-│   └── api/                    # API security scanning
-
-│       ├── __init__.py
-
-│       └── scanner.py          # OWASP API Top 10 scanner
-
-│
-
-├── victim/                     # Intentionally vulnerable FastAPI app
-
-│   ├── Dockerfile
-
-│   ├── requirements.txt
-
-│   └── app/
-
-│       └── main.py             # Vulnerable endpoints
-
-│
-
-├── attacker/                   # Kali Linux attack simulation
-
-│   ├── scripts/
-
-│   │   ├── scan_victim.sh      # Reconnaissance script
-
-│   │   └── brute_force.sh      # Password attack simulation
-
-│   └── wordlists/
-
-│       └── common_passwords.txt
-
-│
-
-├── dashboard/                  # 🆕 Phase 4: Streamlit Dashboard
-│   ├── __init__.py
-│   ├── app.py                  # Main dashboard (6 tabs, sidebar, auto-refresh)
-│   ├── utils.py                # Data fetching, sample data, exports
-│   └── styles.py               # Custom CSS (glassmorphism, severity badges)
-│
-├── demo_narration_script.md    # 🆕 60-90s viva narration script
-│
-├── zeek/                       # Network traffic analysis
-│   └── config/
-│       └── local.zeek          # Zeek configuration
-│
-└── analyzer/                   # Legacy anomaly detection
-    └── src/
-        ├── zeek_parser.py
-        ├── baseline.py
-        └── detector.py
-```
-
-
-
----
-
-
-
-## 🆕 Phase 3: Integration & Correlation Backend
-
-
-
-### Overview
-
-
-
-The Phase 3 backend is a **FastAPI** application that acts as the central hub for SecuriSphere. It receives alerts from all Phase 2 modules, stores them in SQLite, and runs a **5-rule correlation engine** that groups related alerts into escalated security incidents.
-
-
-
-### Architecture
-
-
-
-```
-
-Phase 2 Modules                    Phase 3 Backend
-
-┌──────────────┐                 ┌────────────────────────────────────┐
-
-│   Network    │──── POST ────→  │         FastAPI (main.py)          │
-
-│   Detector   │   /alerts       │                                    │
-
-├──────────────┤                 │  ┌──────────┐   ┌───────────────┐  │
-
-│   Password   │──── POST ────→  │  │ SQLite   │   │  Correlation  │  │
-
-│   Auditor    │   /alerts       │  │ Database │←──│    Engine     │  │
-
-├──────────────┤                 │  │          │   │  (5 rules)    │  │
-
-│     API      │──── POST ────→  │  └──────────┘   └───────────────┘  │
-
-│   Scanner    │   /alerts       │                                    │
-
-└──────────────┘                 └────────────────────────────────────┘
-
-                                          │
-
-                                          ▼
-
-                                 ┌────────────────────┐
-
-                                 │ Escalated Incidents │
-
-                                 │  with Stories &     │
-
-                                 │  Grouped Alert IDs  │
-
-                                 └────────────────────┘
-
-```
-
-
-
-### Correlation Rules
-
-
-
-| # | Rule Name | Trigger | Escalated Severity |
-
-|---|-----------|---------|-------------------|
-
-| 1 | **Credential Abuse Likely** | Weak password + network anomaly (same asset, 10 min) | 🔴 Critical |
-
-| 2 | **Recon + Active Exploitation** | Network scanning + API vulnerability (same asset) | 🔴 Critical |
-
-| 3 | **Multi-Signal Attack** | 3+ medium alerts on same asset in 15 min | 🟠 Critical/High |
-
-| 4 | **API Takeover Attempt** | API auth flaw + brute-force network traffic | 🔴 Critical |
-
-| 5 | **Identity Compromise Risk** | Weak password + login from new IP | 🟠 High |
-
-
-
-### API Endpoints
-
-
-
-| Method | Path | Description |
-
-|--------|------|-------------|
-
-| `POST` | `/alerts` | Receive and store an alert (auto-triggers correlation) |
-
-| `GET` | `/alerts` | List alerts with filters (module, severity, asset) |
-
-| `GET` | `/incidents` | List correlated incidents with severity filter |
-
-| `POST` | `/correlate` | Manually trigger the correlation engine |
-
-| `GET` | `/stats` | Dashboard summary statistics |
-
-| `GET` | `/health` | Health check |
-
-| `GET` | `/docs` | Interactive Swagger API documentation |
-
-
-
-### Quick Start — Phase 3 Backend
-
-
-
-```bash
-
-# 1. Install backend dependencies
-
-cd securesphere
-
-pip install -r backend/requirements.txt
-
-
-
-# 2. Start the backend server
-
-python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
-
-
-
-# 3. Submit test alerts (in another terminal)
-
-python scripts/submit_sample_alerts.py
-
-
-
-# 4. Explore the results
-
-#   Swagger UI:  http://localhost:8000/docs
-
-#   All Alerts:  http://localhost:8000/alerts
-
-#   Incidents:   http://localhost:8000/incidents
-
-#   Stats:       http://localhost:8000/stats
-
-```
-
-
-
-### Incident Story Example
-
-
-
-Each correlated incident includes a human-readable story:
-
-
-
-```
-
-🔴 CRITICAL — Credential Abuse Likely
-
-
-
-What happened:
-
-  • A weak/compromised password policy was flagged (alert #2, severity: high)
-
-  • Abnormal network traffic was detected (alert #1, severity: high)
-
-  • Both events hit the SAME asset: 'victim-app:8000'
-
-  • Time gap between events: 120 seconds
-
-
-
-Why this is critical:
-
-  An attacker likely obtained valid credentials through policy weaknesses
-
-  and is now conducting unauthorized access.
-
-
-
-Recommended action:
-
-  Immediately rotate credentials, enable MFA, and review access logs.
-
-```
-
-
-
----
-
-
-
-## 🔧 Phase 2: Security Modules
-
-
-
-### 1. Network Anomaly Detector (`modules/network/anomaly_detector.py`)
-
-
-
-Detects network traffic anomalies using machine learning.
-
-
-
-**Features:**
-
-- Parses Zeek `conn.log` files (TSV format)
-
-- IsolationForest model for anomaly detection
-
-- Z-score statistical fallback
-
-- JSON alert output with severity levels
-
-
-
-**Usage:**
-
-```bash
-
-python modules/network/anomaly_detector.py --log-path /logs/conn.log --mode detect
-
-```
-
-
-
----
-
-
-
-### 2. Password Policy Auditor (`modules/password/auditor.py`)
-
-
-
-Audits password policies against security standards.
-
-
-
-**Features:**
-
-- Checks against NIST SP 800-63B and industry standards
-
-- Computes compliance score (0-100) and grade (A-F)
-
-- Optional LDAP/OpenLDAP integration
-
-
-
-**Usage:**
-
-```bash
-
-python modules/password/auditor.py --config /path/to/policy.conf
-
-```
-
-
-
----
-
-
-
-### 3. API Security Scanner (`modules/api/scanner.py`)
-
-
-
-Scans APIs for OWASP API Security Top 10 vulnerabilities.
-
-
-
-**Features:**
-
-- Broken Authentication, Injection, Rate Limiting, BOLA/IDOR
-
-- Security header checking and weak credential testing
-
-
-
-**Usage:**
-
-```bash
-
-python modules/api/scanner.py --target http://victim-app:8000
-
-```
-
-
-
----
-
-
-
-## 📊 Unified Alert Format
-
-
-
-All modules output JSON alerts to the Phase 3 backend:
-
-
-
-```json
-
-{
-
-  "module": "network|password|api",
-
-  "type": "connection_anomaly|policy_audit|security_scan",
-
-  "severity": "info|low|medium|high|critical",
-
-  "timestamp": "2026-02-10T07:00:00",
-
-  "asset": "victim-app:8000",
-
-  "details": { }
-
-}
-
-```
-
-
-
----
-
-
-
-## 🚀 Full Quick Start
-
-
-
-### Prerequisites
-
-
-
-- Docker Desktop (Windows/Mac) or Docker Engine (Linux)
-
-- Docker Compose v2.0+
-
-- Python 3.8+ with pip
-
-- 8GB+ RAM recommended
-
-
-
-### 1. Clone the Repository
-
-
-
-```bash
-
-git clone https://github.com/PrashantPatil-2005/SecureSphere.git
-
-cd securesphere
-
-```
-
-
-
-### 2. Start the Lab Environment (Phase 1)
-
-
-
-```bash
-
-docker-compose up -d --build
-
-docker-compose logs -f
-
-```
-
-
-
-### 3. Run Security Modules (Phase 2)
-
-
-
-```bash
-
-pip install pandas numpy scikit-learn requests ldap3
-
-python modules/network/anomaly_detector.py --log-path zeek_logs/conn.log --mode detect
-
-python modules/password/auditor.py --config /path/to/policy.conf
-
-python modules/api/scanner.py --target http://localhost:8000
-
-```
-
-
-
-### 4. Start Correlation Backend (Phase 3)
-
-
-
-```bash
-
-pip install -r backend/requirements.txt
-
-python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
-
-python scripts/submit_sample_alerts.py   # Test with sample data
-```
-
-### 5. Launch Streamlit Dashboard (Phase 4)
-
-```bash
-# Install dashboard dependencies
-pip install streamlit plotly pandas requests fpdf2
-
-# Start the dashboard (backend must be running on port 8000)
-streamlit run dashboard/app.py
-
-# Dashboard opens at http://localhost:8501
-```
-
-### 🎬 Demo Walkthrough
-
-1. Start the backend: `python -m uvicorn backend.main:app --port 8000`
-2. Start the dashboard: `streamlit run dashboard/app.py`
-3. Click **"Simulate Attack"** → select **"Multi-Stage Attack"** → click **Launch**
-4. Watch all 6 tabs populate with real-time data
-5. Navigate to the **"Correlated Incidents ⭐"** tab to show correlation magic
-6. Toggle **"Before vs After"** to demonstrate the core value
-7. Export CSV/PDF from the sidebar
-
-
----
-
-
-
-## 📋 Phase Progress
-
-
-
-- [x] **Phase 1**: Docker Lab Environment
-
-- [x] **Phase 2**: Security Modules
-
-  - [x] Network Anomaly Detector (IsolationForest + Z-score)
-
-  - [x] Password Policy Auditor (NIST SP 800-63B)
-
-  - [x] API Security Scanner (OWASP Top 10)
-
-- [x] **Phase 3**: Integration & Correlation Engine
-
-  - [x] FastAPI Backend with REST API
-
-  - [x] SQLite Database (alerts, incidents, join table)
-
-  - [x] 5-Rule Correlation Engine with story generation
-
-  - [x] Background Scheduler (APScheduler)
-
-  - [x] Sample alert submission script
-
-- [x] **Phase 4**: Unified Professional Dashboard
-  - [x] Streamlit dashboard with 6 tabs
-  - [x] Plotly charts (risk gauge, timeline, pie/bar charts, heatmap)
-  - [x] 3 attack simulation scenarios
-  - [x] Auto-refresh with live indicator
-  - [x] CSV/PDF export
-  - [x] Before vs After correlation toggle
-  - [x] Sample data fallback for offline demo
-
-
-
----
-
-
-
-## ⚠️ Disclaimer
-
-
-
-> **This project is for educational purposes only.**
-
-> The victim application contains intentional security vulnerabilities.
-
-> DO NOT deploy in production or expose to the internet.
-
-
-
----
-
-
-
-## 📝 License
-
-
-
-MIT License - See LICENSE file for details.
-
-
-
----
-
-
-
-## 👥 Contributors
-
-
-
-- SecuriSphere Team - BTech Final Year Project
-
+## Prerequisites
+
+- [Docker](https://docs.docker.com/get-docker/)
+- [Docker Compose](https://docs.docker.com/compose/install/)
+- [Git](https://git-scm.com/downloads)
+
+## Quick Start
+
+1. **Clone the repository**
+   ```bash
+   git clone https://github.com/your/securisphere.git
+   cd securisphere
+   ```
+
+2. **Setup the environment**
+   ```bash
+   make setup
+   ```
+
+3. **Start the application**
+   ```bash
+   make start
+   ```
+
+## Phase 1 Status
+
+Phase 1 completes the project foundation:
+- [x] Project structure
+- [x] Docker Compose with Redis & PostgreSQL
+- [x] Database Schema
+- [x] Basic Scripts & Makefile
+
+**To verify Phase 1:**
+Run `make health` to check if Redis and PostgreSQL are up and running correctly.
+
+## Available Commands
+
+| Command | Description |
+|---------|-------------|
+| `make setup` | Run initial setup (create .env, dirs, start db) |
+| `make start` | Start all services |
+| `make stop` | Stop all services |
+| `make reset` | Stop services and remove all data volumes |
+| `make health` | Run health checks |
+| `make logs` | View logs from all containers |
+| `make shell-db` | Access PostgreSQL shell |
+| `make shell-redis` | Access Redis shell |
+
+## Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `REDIS_PORT` | Port for Redis | 6379 |
+| `POSTGRES_PORT` | Port for PostgreSQL | 5432 |
+| `POSTGRES_DB` | Database name | securisphere_db |
+| `MONITOR_INTERFACE` | Network interface to monitor | eth0 |
+
+See `.env.example` for all available configuration options.
+
+## Database Schema
+
+- **security_events**: Raw security events from all monitors
+- **correlated_incidents**: High-level incidents generated by correlation engine
+- **risk_scores**: Dynamic risk scores for entities (IPs, users)
+- **baseline_metrics**: Statistical baselines for anomaly detection
+
+## Troubleshooting
+
+- **Database connection failed**: Ensure `make setup` ran successfully and containers are healthy.
+- **Redis connection failed**: Check `make logs-redis` for errors.
+- **Port conflicts**: Modify ports in `.env` if 5432 or 6379 are taken.
+
+## Project Phases
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| 1 | Foundation & Infrastructure | ✅ |
+| 2 | Target Services (API, Auth) | ⬜ |
+| 3 | Security Monitors | ⬜ |
+| 4 | Event Normalization | ⬜ |
+| 5 | Correlation Engine | ⬜ |
+| 6 | Backend API | ⬜ |
+| 7 | Frontend Dashboard | ⬜ |
+| 8 | Attack Simulation | ⬜ |
+| 9 | Integration Testing | ⬜ |
+| 10 | Evaluation Framework | ⬜ |

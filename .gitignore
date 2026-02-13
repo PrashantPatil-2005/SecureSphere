@@ -1,86 +1,30 @@
-# =============================================================================
-# SecuriSphere - Git Ignore Rules
-# =============================================================================
-
 # Python
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Virtual environments
-venv/
-ENV/
-env/
+*.pyc
 .venv/
+venv/
+.pytest_cache/
 
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-*~
-.project
-.pydevproject
-.settings/
-
-# Logs
-*.log
-logs/
-zeek_logs/
-
-# Database
-*.db
-*.sqlite
-*.sqlite3
-
-# Environment variables
-.env
-.env.local
-.env.*.local
+# Node
+node_modules/
+build/
+.next/
 
 # Docker
-.docker/
+*.log
+
+# Environment
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
 
 # OS
 .DS_Store
 Thumbs.db
-Desktop.ini
 
-# Test coverage
-htmlcov/
-.tox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-.hypothesis/
-.pytest_cache/
-
-# Jupyter
-.ipynb_checkpoints/
-
-# Security - Never commit these!
-*.pem
-*.key
-*.crt
-secrets/
-credentials/
+# Project specific
+logs/*.log
+evaluation/results/*.json

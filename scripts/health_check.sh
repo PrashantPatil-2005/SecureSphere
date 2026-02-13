@@ -1,0 +1,85 @@
+#!/bin/bash
+
+# SecuriSphere Health Check Script
+# Colors
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+echo ""
+echo "========================================="
+echo "  SecuriSphere Health Check"
+echo "========================================="
+echo ""
+
+PASS=0
+FAIL=0
+
+# ---- Check Redis ----
+echo -n "Checking Redis... "
+REDIS_PING=$(docker exec securisphere-redis redis-cli ping 2>/dev/null)
+
+if [ "$REDIS_PING" == "PONG" ]; then
+    echo -e "${GREEN}PASS${NC}"
+    PASS=$((PASS + 1))
+else
+    echo -e "${RED}FAIL${NC}"
+    echo "  Redis did not respond with PONG"
+    FAIL=$((FAIL + 1))
+fi
+
+# ---- Check PostgreSQL Connection ----
+echo -n "Checking PostgreSQL Connection... "
+PG_READY=$(docker exec securisphere-db pg_isready -U securisphere_user -d securisphere_db 2>/dev/null)
+
+if echo "$PG_READY" | grep -q "accepting connections"; then
+    echo -e "${GREEN}PASS${NC}"
+    PASS=$((PASS + 1))
+else
+    echo -e "${RED}FAIL${NC}"
+    echo "  PostgreSQL is not accepting connections"
+    FAIL=$((FAIL + 1))
+fi
+
+# ---- Check Database Tables ----
+echo -n "Checking Database Tables... "
+TABLE_COUNT=$(docker exec securisphere-db psql -U securisphere_user -d securisphere_db -t -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public';" 2>/dev/null | tr -d ' ')
+
+if [ "$TABLE_COUNT" -eq 4 ] 2>/dev/null; then
+    echo -e "${GREEN}PASS${NC} (Found $TABLE_COUNT tables)"
+    PASS=$((PASS + 1))
+else
+    echo -e "${RED}FAIL${NC}"
+    echo "  Expected 4 tables, found: $TABLE_COUNT"
+    FAIL=$((FAIL + 1))
+fi
+
+# ---- List Tables ----
+echo ""
+echo "Tables in database:"
+docker exec securisphere-db psql -U securisphere_user -d securisphere_db -c "\dt" 2>/dev/null
+
+# ---- Check Indexes ----
+echo -n "Checking Indexes... "
+INDEX_COUNT=$(docker exec securisphere-db psql -U securisphere_user -d securisphere_db -t -c "SELECT COUNT(*) FROM pg_indexes WHERE schemaname = 'public';" 2>/dev/null | tr -d ' ')
+
+if [ "$INDEX_COUNT" -ge 10 ] 2>/dev/null; then
+    echo -e "${GREEN}PASS${NC} (Found $INDEX_COUNT indexes)"
+    PASS=$((PASS + 1))
+else
+    echo -e "${YELLOW}WARNING${NC} (Found $INDEX_COUNT indexes, expected 10+)"
+fi
+
+# ---- Summary ----
+echo ""
+echo "========================================="
+echo "  Results: ${GREEN}$PASS passed${NC}, ${RED}$FAIL failed${NC}"
+echo "========================================="
+echo ""
+
+if [ $FAIL -gt 0 ]; then
+    exit 1
+else
+    exit 0
+fi
