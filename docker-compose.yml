@@ -106,6 +106,92 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  network-monitor:
+    build:
+      context: ./monitors/network
+      dockerfile: Dockerfile
+    container_name: securisphere-netmon
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    network_mode: "service:api-server"
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      MONITOR_INTERFACE: eth0
+    depends_on:
+      redis:
+        condition: service_healthy
+      api-server:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  api-monitor:
+    build:
+      context: ./monitors/api
+      dockerfile: Dockerfile
+    container_name: securisphere-apimon
+    ports:
+      - "5050:5050"
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      TARGET_API: http://api-server:5000
+    depends_on:
+      redis:
+        condition: service_healthy
+      api-server:
+        condition: service_healthy
+    networks:
+      - securisphere-network
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:5050/monitor/health" ]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  auth-monitor:
+    build:
+      context: ./monitors/auth
+      dockerfile: Dockerfile
+    container_name: securisphere-authmon
+    ports:
+      - "5060:5060"
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: ${REDIS_PORT:-6379}
+    depends_on:
+      redis:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+    networks:
+      - securisphere-network
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:5060/monitor/health" ]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 networks:
   securisphere-network:
     driver: bridge

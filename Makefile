@@ -101,3 +101,31 @@ logs-api:
 
 logs-auth:
 	docker-compose logs -f auth-service
+
+# Phase 3 Targets
+build-monitors:
+	docker-compose build network-monitor api-monitor auth-monitor
+
+start-monitors:
+	docker-compose up -d network-monitor api-monitor auth-monitor
+
+stop-monitors:
+	docker-compose stop network-monitor api-monitor auth-monitor
+
+test-monitors:
+	bash scripts/test_monitors.sh
+
+test-phase3:
+	python -m pytest tests/test_phase3.py -v
+
+logs-netmon:
+	docker-compose logs -f network-monitor
+
+logs-apimon:
+	docker-compose logs -f api-monitor
+
+logs-authmon:
+	docker-compose logs -f auth-monitor
+
+monitor-events:
+	docker exec -it securisphere-redis redis-cli SUBSCRIBE security_events

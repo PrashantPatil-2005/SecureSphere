@@ -97,6 +97,45 @@ else
     FAIL=$((FAIL + 1))
 fi
 
+# ---- Check API Monitor ----
+echo -n "Checking API Monitor... "
+APIMON_STATUS=$(curl -s http://localhost:5050/monitor/health | grep -o '"status": "running"')
+
+if [ ! -z "$APIMON_STATUS" ]; then
+    echo -e "${GREEN}PASS${NC}"
+    PASS=$((PASS + 1))
+else
+    echo -e "${RED}FAIL${NC}"
+    echo "  API Monitor not running"
+    FAIL=$((FAIL + 1))
+fi
+
+# ---- Check Auth Monitor ----
+echo -n "Checking Auth Monitor... "
+AUTHMON_STATUS=$(curl -s http://localhost:5060/monitor/health | grep -o '"status": "running"')
+
+if [ ! -z "$AUTHMON_STATUS" ]; then
+    echo -e "${GREEN}PASS${NC}"
+    PASS=$((PASS + 1))
+else
+    echo -e "${RED}FAIL${NC}"
+    echo "  Auth Monitor not running"
+    FAIL=$((FAIL + 1))
+fi
+
+# ---- Check Network Monitor ----
+echo -n "Checking Network Monitor... "
+NETMON_RUNNING=$(docker ps --filter "name=securisphere-netmon" --format "{{.Status}}" | grep "Up")
+
+if [ ! -z "$NETMON_RUNNING" ]; then
+    echo -e "${GREEN}PASS${NC}"
+    PASS=$((PASS + 1))
+else
+    echo -e "${RED}FAIL${NC}"
+    echo "  Network Monitor container not running"
+    FAIL=$((FAIL + 1))
+fi
+
 # ---- Summary ----
 echo ""
 echo "========================================="
