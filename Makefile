@@ -53,3 +53,51 @@ help:
 	@echo "  shell-redis - open redis-cli"
 	@echo "  shell-db    - open psql shell"
 	@echo "  clean       - Remove temporary files"
+
+build:
+	docker-compose build
+
+build-api:
+	docker-compose build api-server
+
+build-auth:
+	docker-compose build auth-service
+
+test-api:
+	@echo "--- Health Check ---"
+	@curl -s http://localhost:5000/api/health | python -m json.tool
+	@echo "--- List Products ---"
+	@curl -s http://localhost:5000/api/products | python -m json.tool
+	@echo "--- Search Products ---"
+	@curl -s "http://localhost:5000/api/products/search?q=laptop" | python -m json.tool
+	@echo "--- SQL Injection Test ---"
+	@curl -s "http://localhost:5000/api/products/search?q=' OR '1'='1" | python -m json.tool
+	@echo "--- Path Traversal Test ---"
+	@curl -s "http://localhost:5000/api/files?name=../../../etc/passwd" | python -m json.tool
+	@echo "--- Admin Config ---"
+	@curl -s http://localhost:5000/api/admin/config | python -m json.tool
+
+test-auth:
+	@echo "--- Auth Status ---"
+	@curl -s http://localhost:5001/auth/status | python -m json.tool
+	@echo "--- Successful Login ---"
+	@curl -s -X POST http://localhost:5001/auth/login -H "Content-Type: application/json" -d '{"username":"admin","password":"admin123"}' | python -m json.tool
+	@echo "--- Failed Login ---"
+	@curl -s -X POST http://localhost:5001/auth/login -H "Content-Type: application/json" -d '{"username":"admin","password":"wrongpass"}' | python -m json.tool
+	@echo "--- Reset All ---"
+	@curl -s -X POST http://localhost:5001/auth/reset-all | python -m json.tool
+
+test-phase2:
+	python -m pytest tests/test_phase2.py -v
+
+shell-api:
+	docker exec -it securisphere-api /bin/bash
+
+shell-auth:
+	docker exec -it securisphere-auth /bin/bash
+
+logs-api:
+	docker-compose logs -f api-server
+
+logs-auth:
+	docker-compose logs -f auth-service

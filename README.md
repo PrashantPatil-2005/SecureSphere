@@ -63,6 +63,24 @@ Run `make health` to check if Redis and PostgreSQL are up and running correctly.
 | `make logs` | View logs from all containers |
 | `make shell-db` | Access PostgreSQL shell |
 | `make shell-redis` | Access Redis shell |
+| `make test-api` | Run curl tests for API Server |
+| `make test-auth` | Run curl tests for Auth Service |
+| `make test-phase2` | Run full pytest suite for Phase 2 |
+
+## Phase 2: Target Services
+
+### API Server (Port 5000)
+Intentionally vulnerable Flask API simulating an e-commerce backend.
+- **GET /api/products/search?q=**: Vulnerable to SQL Injection
+- **GET /api/files?name=**: Vulnerable to Path Traversal
+- **GET /api/admin/config**: Vulnerable to Broken Access Control (No Auth)
+- **GET /api/admin/users/export**: Vulnerable to Sensitive Data Exposure
+
+### Auth Service (Port 5001)
+Authentication service tracking login attempts.
+- **POST /auth/login**: Login handler
+- **Lockout Mechanism**: Account locked after 5 failed attempts
+- **POST /auth/reset/<username>**: Reset locked account
 
 ## Environment Variables
 

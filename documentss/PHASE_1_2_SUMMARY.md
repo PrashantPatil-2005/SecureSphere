@@ -6,7 +6,7 @@
 
 **Current Status:**
 - **Phase 1 (Foundation):** Completed. Docker infrastructure, environment setup, and Git initialization.
-- **Phase 2 (Target Services):** Completed. Development of vulnerable target services (`api-server`, `auth-service`) and database integration.
+- **Phase 2 (Target Services):** Completed. Development of vulnerable target services (`api-server`, `auth-service`) and integration with Redis event bus.
 
 ---
 
@@ -19,30 +19,31 @@ Follow these steps to get the project running on your local machine.
 - **Git** (Installed and configured)
 - **Python 3.10+** (For local testing scripts)
 
-### Quick Start (Windows)
-We have created a `run.bat` script to simplify management on Windows.
+### Quick Start
+We have updated the `Makefile` to simplify management.
 
-1.  **Start the Environment:**
-    ```powershell
-    .\run.bat start
+1.  **Build and Start the Environment:**
+    ```bash
+    make build
+    make start
     ```
-    This builds the Docker images and starts all services in the background.
+    This builds the Docker images and starts all services (Redis, Database, API Server, Auth Service).
 
 2.  **Check Health:**
-    ```powershell
-    .\run.bat health
+    ```bash
+    make health
     ```
-    Verifies that Redis and PostgreSQL are healthy and ready.
+    Verifies that all services including api-server and auth-service are healthy.
 
 3.  **View Logs:**
-    ```powershell
-    .\run.bat logs
+    ```bash
+    make logs
     ```
     Streams logs from all running containers.
 
 4.  **Stop the Environment:**
-    ```powershell
-    .\run.bat stop
+    ```bash
+    make stop
     ```
 
 ---
@@ -55,75 +56,86 @@ The system is containerized using Docker Compose and consists of the following c
 - **Database (`securisphere-db`)**: 
     - **Image**: `postgres:15-alpine`
     - **Port**: 5432
-    - **Role**: Stores application data (users) and future security alerts.
-    - **Schema**: Initialized with `users` table and seed data (`admin`, `user1`, `user2`).
+    - **Role**: Primary data store for the security platform (correlated incidents, user data).
 - **Redis (`securisphere-redis`)**:
     - **Image**: `redis:7.2-alpine`
     - **Port**: 6379
-    - **Role**: Message broker for real-time alert processing (Pub/Sub).
+    - **Role**: Event bus for real-time log publishing from target services to monitors.
 
 ### 2. Target Services (Vulnerable)
-These services are intentionally vulnerable to allow the security modules (Phase 3) to detect attacks.
+These services are intentionally vulnerable to allow the security modules (Phase 3) to detect attacks. They run in their own containers.
 
 #### A. API Server (`securisphere-api`)
 - **Path**: `targets/api-server/`
 - **Port**: 5000
-- **Tech Stack**: Python, Flask, Psycopg2
+- **Internal DB**: SQLite (simulating product/user DB)
+- **Tech Stack**: Python 3.10, Flask, Redis Client
 - **Vulnerabilities**:
-    - **SQL Injection**: The `/users?id=` endpoint directly concatenates user input into SQL queries.
-    - **IDOR (Insecure Direct Object Reference)**: The `/data/<id>` endpoint accesses files without verifying ownership.
-- **Endpoints**:
-    - `GET /` : Health check.
-    - `GET /users`: List users (Vulnerable to SQLi).
-    - `GET /data/<id>`: Retrieve data (Vulnerable to IDOR).
+    - **SQL Injection**: `GET /api/products/search?q=` (Unsanitized query injection)
+    - **Path Traversal**: `GET /api/files?name=` (Access to system files)
+    - **Broken Access Control**: `GET /api/admin/config` (Sensitive config exposed without auth)
+    - **Sensitive Data Exposure**: `GET /api/admin/users/export` (Full user dump)
+- **Logging**: Publishes request logs to Redis channel `api_logs`.
 
 #### B. Auth Service (`securisphere-auth`)
 - **Path**: `targets/auth-service/`
 - **Port**: 5001
-- **Tech Stack**: Python, Flask, PyJWT
-- **Vulnerabilities**:
-    - **Weak Password Policy**: No complexity requirements for registration.
-    - **Hardcoded Secrets**: Uses a weak secret key for JWT signing.
+- **Internal DB**: SQLite (simulating auth DB)
+- **Tech Stack**: Python 3.10, Flask, Redis Client
+- **Features**:
+    - **Brute Force Detection**: Locks account after 5 failed attempts.
+    - **Event Publishing**: Publishes `login_success`, `login_failure`, and `account_lockout` events to Redis channel `auth_events`.
 - **Endpoints**:
-    - `POST /register`: Create a new user.
-    - `POST /login`: Authenticate and receive a JWT.
-    - `POST /verify`: Verify a JWT token.
+    - `POST /auth/login`: Authenticate user.
+    - `POST /auth/reset/<username>`: Reset locked account.
+    - `GET /auth/status`: Service health and stats.
 
 ---
 
 ## 🔍 Verification & Testing
 
-We have successfully verified the implementation using both automated tests and manual checks.
+We have successfully verified the implementation using automated tests.
 
 ### Automated Tests
-Run the improved test suite using `pytest`:
+Run the comprehensive test suite using `pytest`:
 ```bash
-python -m pytest tests/test_phase2.py
+make test-phase2
 ```
-**Coverage:**
-- Service reachability (HTTP 200 OK on home endpoints).
-- Authentication flow (Register -> Login -> Token generation).
-- Database connectivity (API Server correctly querying PostgreSQL).
+This runs `tests/test_phase2.py` which verifies:
+- API endpoint functionality and health.
+- Exploitability of SQL Injection and Path Traversal.
+- Brute force lockout mechanism (5 failed attempts -> Lockout).
+- Redis event publishing.
 
 ### Manual Verification
-You can manually test the endpoints using `curl` or a browser:
+You can manually test the endpoints using correct `curl` commands:
 
-1.  **Test API Server:**
+1.  **Test API Health:**
     ```bash
-    curl http://localhost:5000/users
+    make test-api
     ```
-    *Expected Output:* A JSON list of users from the database.
+    
+2.  **Test SQL Injection:**
+    ```bash
+    curl "http://localhost:5000/api/products/search?q=' OR '1'='1"
+    ```
+    *Expected Output:* Returns ALL products (bypassing search filter).
 
-2.  **Test Auth Service:**
+3.  **Test Path Traversal:**
     ```bash
-    curl -X POST http://localhost:5001/login -H "Content-Type: application/json" -d "{\"username\":\"admin\", \"password\":\"password123\"}"
+    curl "http://localhost:5000/api/files?name=../../../etc/passwd"
     ```
-    *Expected Output:* A JSON object containing a `token`.
+    *Expected Output:* Content of /etc/passwd file (or similar system file).
+
+4.  **Test Auth Service:**
+    ```bash
+    make test-auth
+    ```
 
 ---
 
 ## 🔜 Next Steps (Phase 3)
 With the foundation and target services in place, the next phase will focus on building the **Security Analysis Modules**:
 1.  **Network Monitor**: To detect anomalies in traffic.
-2.  **API Monitor**: To detect the SQLi and IDOR attacks we implemented.
-3.  **Auth Monitor**: To detect brute-force attacks and weak passwords.
+2.  **API Monitor**: To consume `api_logs` from Redis and detect SQLi/Traversals.
+3.  **Auth Monitor**: To consume `auth_events` from Redis and detect brute-force attacks.

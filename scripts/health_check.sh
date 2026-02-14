@@ -71,6 +71,32 @@ else
     echo -e "${YELLOW}WARNING${NC} (Found $INDEX_COUNT indexes, expected 10+)"
 fi
 
+# ---- Check API Server ----
+echo -n "Checking API Server... "
+API_STATUS=$(curl -s http://localhost:5000/api/health | grep -o '"status": "healthy"')
+
+if [ ! -z "$API_STATUS" ]; then
+    echo -e "${GREEN}PASS${NC}"
+    PASS=$((PASS + 1))
+else
+    echo -e "${RED}FAIL${NC}"
+    echo "  API Server not healthy"
+    FAIL=$((FAIL + 1))
+fi
+
+# ---- Check Auth Service ----
+echo -n "Checking Auth Service... "
+AUTH_STATUS=$(curl -s http://localhost:5001/auth/status | grep -o '"status": "running"')
+
+if [ ! -z "$AUTH_STATUS" ]; then
+    echo -e "${GREEN}PASS${NC}"
+    PASS=$((PASS + 1))
+else
+    echo -e "${RED}FAIL${NC}"
+    echo "  Auth Service not running"
+    FAIL=$((FAIL + 1))
+fi
+
 # ---- Summary ----
 echo ""
 echo "========================================="
