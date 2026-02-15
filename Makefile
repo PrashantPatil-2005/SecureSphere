@@ -209,6 +209,25 @@ attack-stealth:
 attack-all:
 	docker-compose run --rm attack-simulator all
 
+# ────────── PCAP ANALYSIS ──────────
+generate-pcap: ## Generate sample .pcap files
+	cd simulation && python generate_sample_pcap.py all --output-dir ../samples/pcap
+
+analyze-pcap: ## Analyze a .pcap file (usage: make analyze-pcap FILE=samples/pcap/mixed_attack_sample.pcap)
+	cd monitors/network && python pcap_analyzer.py "../../$(FILE)" --speed 0
+
+analyze-pcap-offline: ## Analyze .pcap without Redis (usage: make analyze-pcap-offline FILE=file.pcap)
+	cd monitors/network && python pcap_analyzer.py "../../$(FILE)" --no-redis --speed 0
+
+pcap-info: ## Show .pcap file info (usage: make pcap-info FILE=file.pcap)
+	cd monitors/network && python pcap_analyzer.py "../../$(FILE)" --info-only
+
+pcap-demo: ## Interactive PCAP demo menu
+	@bash scripts/pcap_demo.sh
+
+pcap-full-demo: ## Generate + analyze + show results (one command)
+	@bash scripts/pcap_demo.sh <<< "5"
+
 demo:
 	docker-compose run --rm attack-simulator full_kill_chain --delay demo
 

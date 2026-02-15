@@ -16,6 +16,9 @@ IF "%1"=="shell-redis" GOTO shell-redis
 IF "%1"=="shell-db" GOTO shell-db
 IF "%1"=="clean" GOTO clean
 IF "%1"=="help" GOTO help
+IF "%1"=="generate-pcap" GOTO generate-pcap
+IF "%1"=="analyze-pcap" GOTO analyze-pcap
+IF "%1"=="pcap-info" GOTO pcap-info
 
 :setup
 echo Running setup...
@@ -79,6 +82,35 @@ rmdir /s /q __pycache__
 del /s /q logs\*.log
 GOTO end
 
+:generate-pcap
+echo Generating sample PCAP files...
+pushd simulation
+python generate_sample_pcap.py all --output-dir ../samples/pcap
+popd
+GOTO end
+
+:analyze-pcap
+IF "%2"=="" (
+    echo Usage: run.bat analyze-pcap [path_to_pcap]
+    GOTO end
+)
+echo Analyzing %2...
+pushd monitors\network
+set REDIS_HOST=localhost
+python pcap_analyzer.py "../../%2" --speed 0
+popd
+GOTO end
+
+:pcap-info
+IF "%2"=="" (
+    echo Usage: run.bat pcap-info [path_to_pcap]
+    GOTO end
+)
+pushd monitors\network
+python pcap_analyzer.py "../../%2" --info-only
+popd
+GOTO end
+
 :help
 echo Available commands:
 echo   setup       - Run initial setup script
@@ -94,6 +126,9 @@ echo   ps          - List running containers
 echo   shell-redis - Open redis-cli
 echo   shell-db    - Open psql shell
 echo   clean       - Remove temporary files
+echo   generate-pcap - Generate sample PCAP files
+echo   analyze-pcap  - Analyze PCAP file (requires arg)
+echo   pcap-info     - Show PCAP file info (requires arg)
 GOTO end
 
 :end

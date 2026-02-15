@@ -401,6 +401,27 @@ class NetworkMonitor:
                 
             time.sleep(1)
 
+    def process_pcap_file(self, pcap_file, speed=0):
+        print(f"{Colors.BLUE}[*] Processing PCAP file: {pcap_file}{Colors.RESET}")
+        try:
+            from scapy.all import rdpcap
+            packets = rdpcap(pcap_file)
+            total = len(packets)
+            print(f"{Colors.BLUE}[*] Loaded {total} packets{Colors.RESET}")
+            
+            for i, packet in enumerate(packets):
+                if (i + 1) % 50 == 0:
+                     print(f"\rProcessing packet {i+1}/{total}", end="", flush=True)
+                
+                self.process_packet(packet)
+                
+                if speed > 0:
+                    time.sleep(speed)
+                    
+            print(f"\n{Colors.GREEN}[*] PCAP processing complete{Colors.RESET}")
+        except Exception as e:
+            print(f"{Colors.RED}[!] Error processing PCAP: {e}{Colors.RESET}")
+
     def start(self):
         print(f"{Colors.BLUE}[*] Network Monitor starting on interface: {self.monitor_interface}{Colors.RESET}")
         print(f"{Colors.BLUE}[*] Detections enabled: port_scan, traffic_anomaly, dns_tunneling{Colors.RESET}")
@@ -420,5 +441,18 @@ class NetworkMonitor:
             print(f"{Colors.RED}[!] Unexpected error: {e}{Colors.RESET}")
 
 if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser(description='SecuriSphere Network Monitor')
+    parser.add_argument('--pcap', type=str, default=None, help='Analyze a .pcap file')
+    parser.add_argument('--speed', type=float, default=0, help='Playback speed')
+    parser.add_argument('--simulated', action='store_true', help='Run in simulated mode')
+
+    args = parser.parse_args()
     monitor = NetworkMonitor()
-    monitor.start()
+
+    if args.pcap:
+        monitor.process_pcap_file(args.pcap, speed=args.speed)
+    elif args.simulated:
+        monitor.start_simulated()
+    else:
+        monitor.start()

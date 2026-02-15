@@ -208,6 +208,37 @@ make attack-benign
 
 ---
 
+## 📦 PCAP File Analysis
+
+SecuriSphere can analyze pre-captured network traffic from .pcap files, providing a clear INPUT → OUTPUT demonstration.
+
+### Generate Sample .pcap Files
+```bash
+make generate-pcap
+# Creates: samples/pcap/port_scan_sample.pcap
+# Creates: samples/pcap/dns_tunneling_sample.pcap
+# Creates: samples/pcap/mixed_attack_sample.pcap
+```
+
+### Analyze .pcap Files
+Analyze a file and push events to the Dashboard:
+```bash
+make analyze-pcap FILE=samples/pcap/mixed_attack_sample.pcap
+```
+
+### Interactive Demo
+Launch the PCAP demo menu to generate samples and run analysis interactively:
+```bash
+make pcap-demo
+```
+
+> **Note for Windows Users**:
+> If `make` is not installed, use the included `run.bat` script:
+> - `.\run.bat generate-pcap`
+> - `.\run.bat analyze-pcap samples/pcap/mixed_attack_sample.pcap`
+> - `.\run.bat pcap-info samples/pcap/mixed_attack_sample.pcap`
+---
+
 ## Evaluation
 
 The framework includes a self-evaluation suite that runs all scenarios and calculates performance metrics.
