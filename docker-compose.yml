@@ -221,6 +221,62 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  dashboard:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: securisphere-dashboard
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - securisphere-network
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:3000" ]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  correlation-engine:
+    build:
+      context: ./engine/correlation
+      dockerfile: Dockerfile
+    container_name: securisphere-correlator
+    ports:
+      - "5070:5070"
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      CORRELATION_WINDOW: ${CORRELATION_WINDOW:-900}
+      RISK_DECAY_RATE: ${RISK_DECAY_RATE:-5}
+      RISK_DECAY_INTERVAL: ${RISK_DECAY_INTERVAL:-60}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - securisphere-network
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:5070/engine/health" ]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 networks:
   securisphere-network:
     driver: bridge

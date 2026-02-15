@@ -151,3 +151,38 @@ test-phase4:
 
 shell-backend:
 	docker exec -it securisphere-backend /bin/bash
+
+# Phase 5 Targets
+build-frontend:
+	docker-compose build dashboard
+
+start-frontend:
+	docker-compose up -d dashboard
+
+stop-frontend:
+	docker-compose stop dashboard
+
+logs-frontend:
+	docker-compose logs -f dashboard
+
+open-dashboard:
+	echo "Opening http://localhost:3000" && (xdg-open http://localhost:3000 2>/dev/null || open http://localhost:3000 2>/dev/null || start http://localhost:3000 2>/dev/null)
+
+# Phase 6 Targets
+build-engine:
+	docker-compose build correlation-engine
+
+start-engine:
+	docker-compose up -d correlation-engine
+
+stop-engine:
+	docker-compose stop correlation-engine
+
+logs-engine:
+	docker-compose logs -f correlation-engine
+
+test-correlation:
+	bash scripts/test_correlation.sh
+
+engine-stats:
+	curl -s http://localhost:5070/engine/stats | python3 -m json.tool || echo "Failed to fetch stats"

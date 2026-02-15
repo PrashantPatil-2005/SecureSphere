@@ -147,6 +147,29 @@ else
     FAIL=$((FAIL + 1))
 fi
 
+# ---- Check Dashboard ----
+echo -n "Checking Dashboard... "
+DASHBOARD_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000 2>/dev/null)
+if [ "$DASHBOARD_HEALTH" == "200" ]; then
+    echo -e "${GREEN}PASS${NC}"
+    PASS=$((PASS + 1))
+else
+    echo -e "${RED}FAIL${NC}"
+    FAIL=$((FAIL + 1))
+fi
+
+# ---- Check Correlation Engine ----
+echo -n "Checking Correlation Engine... "
+ENGINE_HEALTH=$(curl -s http://localhost:5070/engine/health 2>/dev/null)
+if echo "$ENGINE_HEALTH" | grep -q '"status":"running"'; then
+    echo -e "${GREEN}PASS${NC}"
+    PASS=$((PASS + 1))
+else
+    echo -e "${RED}FAIL${NC}"
+    echo "  Correlation Engine not reachable or not running"
+    FAIL=$((FAIL + 1))
+fi
+
 # ---- Summary ----
 echo ""
 echo "========================================="
