@@ -17,6 +17,7 @@ echo "  2. Analyze a .pcap file (publish to dashboard)"
 echo "  3. Analyze a .pcap file (offline, no Redis)"
 echo "  4. Show .pcap file info"
 echo "  5. Generate + Analyze (full demo)"
+echo "  6. Open Dashboard Analysis"
 echo "  0. Exit"
 echo ""
 read -p "Select option: " choice
@@ -130,6 +131,17 @@ for i in incidents[:5]:
     echo "  Dashboard: http://localhost:3000"
     echo "  Report: evaluation/results/pcap_analysis.json"
     echo "═══════════════════════════════════════════"
+    ;;
+  
+  6)
+    echo ""
+    echo "Opening dashboard PCAP tab..."
+    echo "Go to: http://localhost:3000"
+    echo "Click the 'PCAP Analysis' tab"
+    echo "Upload a file or select a sample"
+    (xdg-open "http://localhost:3000" 2>/dev/null || \
+     open "http://localhost:3000" 2>/dev/null || \
+     start "http://localhost:3000" 2>/dev/null) &
     ;;
   
   0)

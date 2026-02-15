@@ -237,6 +237,15 @@ make pcap-demo
 > - `.\run.bat generate-pcap`
 > - `.\run.bat analyze-pcap samples/pcap/mixed_attack_sample.pcap`
 > - `.\run.bat pcap-info samples/pcap/mixed_attack_sample.pcap`
+
+### Dashboard Integration
+1. Open dashboard: http://localhost:3000
+2. Click "📦 PCAP Analysis" tab
+3. Upload a .pcap file OR select a sample
+4. View results: packet stats, charts, detected events
+5. Events automatically appear in Events tab
+6. Correlation Engine processes events automatically
+
 ---
 
 ## Evaluation

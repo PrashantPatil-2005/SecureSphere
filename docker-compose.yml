@@ -138,6 +138,9 @@ services:
     container_name: securisphere-apimon
     ports:
       - "5050:5050"
+    volumes:
+      - ./samples/pcap:/app/samples/pcap
+      - api-logs:/var/log/securisphere
     environment:
       REDIS_HOST: redis
       REDIS_PORT: ${REDIS_PORT:-6379}
@@ -156,8 +159,6 @@ services:
       retries: 3
       start_period: 15s
     restart: unless-stopped
-    volumes:
-      - api-logs:/var/log/securisphere
     logging:
       driver: json-file
       options:

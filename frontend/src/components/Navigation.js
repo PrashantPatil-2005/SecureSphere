@@ -39,6 +39,12 @@ const Navigation = ({ selectedTab, onTabChange, eventCount, incidentCount }) => 
             >
                 ⚙️ System
             </button>
+            <button
+                className={`nav-tab ${selectedTab === 'pcap' ? 'active' : ''}`}
+                onClick={() => onTabChange('pcap')}
+            >
+                📦 PCAP Analysis
+            </button>
         </nav>
     );
 };

@@ -10,6 +10,7 @@ import EventsTab from './components/EventsTab';
 import IncidentsTab from './components/IncidentsTab';
 import RiskTab from './components/RiskTab';
 import SystemTab from './components/SystemTab';
+import PcapTab from './components/PcapTab';
 
 // Constants
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8000';
@@ -277,6 +278,7 @@ function App() {
                         onRefresh={handleRefresh}
                     />
                 )}
+                {selectedTab === 'pcap' && <PcapTab />}
             </main>
         </div>
     );

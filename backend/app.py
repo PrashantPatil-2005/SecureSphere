@@ -11,9 +11,12 @@ from flask import Flask, jsonify, request
 from flask_socketio import SocketIO, emit
 from flask_cors import CORS
 from gevent import monkey
-
 # Patch gevent
 monkey.patch_all()
+
+from pcap_handler import PcapProcessor
+
+# ... (logging setup) ...
 
 # Configure Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
@@ -33,6 +36,7 @@ SERVER_START_TIME = datetime.utcnow()
 # Redis Connection
 redis_client = None
 redis_available = False
+pcap_processor = None
 
 def connect_redis():
     global redis_client, redis_available
@@ -42,6 +46,11 @@ def connect_redis():
             if redis_client.ping():
                 redis_available = True
                 logger.info(f"Connected to Redis at {REDIS_HOST}:{REDIS_PORT}")
+                
+                # Initialize PCAP Processor
+                global pcap_processor
+                pcap_processor = PcapProcessor(redis_client)
+                
                 return
         except redis.ConnectionError:
             logger.warning("Redis connection failed. Retrying...")
@@ -419,6 +428,137 @@ def system_status():
         status["correlation_engine"]["incidents"] = redis_client.llen("incidents")
         
     return jsonify({"status": "success", "data": status})
+
+# --- PCAP Endpoints ---
+
+@app.route('/api/pcap/upload', methods=['POST'])
+def upload_pcap():
+    if not pcap_processor:
+        return jsonify({"status": "error", "message": "PCAP Processor not initialized (Redis unavailable)"}), 503
+        
+    if 'file' not in request.files:
+        return jsonify({"status": "error", "message": "No file provided"}), 400
+        
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"status": "error", "message": "No file selected"}), 400
+        
+    if not pcap_processor.validate_file(file.filename):
+        return jsonify({"status": "error", "message": "Invalid file type. Allowed: .pcap, .pcapng, .cap"}), 400
+        
+    try:
+        file_path = pcap_processor.save_uploaded_file(file)
+        job_id = pcap_processor.start_processing(file_path)
+        
+        return jsonify({
+            "status": "success",
+            "message": "File uploaded and processing started",
+            "data": {
+                "job_id": job_id,
+                "file_name": file.filename,
+                "status": "queued"
+            }
+        }), 202
+    except ValueError as e:
+        return jsonify({"status": "error", "message": str(e)}), 413
+    except Exception as e:
+        logger.error(f"Upload error: {e}")
+        return jsonify({"status": "error", "message": "Internal server error"}), 500
+
+@app.route('/api/pcap/status/<job_id>')
+def pcap_status(job_id):
+    if not pcap_processor:
+        return jsonify({"status": "error", "message": "Service unavailable"}), 503
+        
+    job = pcap_processor.get_job_status(job_id)
+    if not job:
+        return jsonify({"status": "error", "message": "Job not found"}), 404
+        
+    return jsonify({
+        "status": "success",
+        "data": {
+            "job_id": job_id,
+            "status": job["status"],
+            "progress": job["progress"],
+            "file": job["file"],
+            "started_at": job["started_at"],
+            "completed_at": job["completed_at"],
+            "results": job["results"],
+            "error": job["error"]
+        }
+    })
+
+@app.route('/api/pcap/jobs')
+def pcap_jobs():
+    if not pcap_processor: return jsonify({"data": {"jobs": [], "count": 0}})
+    
+    jobs = pcap_processor.get_all_jobs()
+    return jsonify({
+        "status": "success",
+        "data": {
+            "jobs": jobs,
+            "count": len(jobs)
+        }
+    })
+
+@app.route('/api/pcap/samples')
+def pcap_samples():
+    if not pcap_processor: return jsonify({"data": {"samples": [], "count": 0}})
+    
+    samples = pcap_processor.get_sample_files()
+    return jsonify({
+        "status": "success",
+        "data": {
+            "samples": samples,
+            "count": len(samples)
+        }
+    })
+
+@app.route('/api/pcap/analyze-sample', methods=['POST'])
+def analyze_sample():
+    if not pcap_processor: return jsonify({"error": "Service unavailable"}), 503
+    
+    data = request.json
+    sample_name = data.get('sample_name')
+    if not sample_name:
+        return jsonify({"status": "error", "message": "sample_name required"}), 400
+        
+    # Find sample path
+    samples = pcap_processor.get_sample_files()
+    sample_path = next((s['path'] for s in samples if s['name'] == sample_name), None)
+    
+    if not sample_path:
+        return jsonify({"status": "error", "message": "Sample file not found"}), 404
+        
+    job_id = pcap_processor.start_processing(sample_path)
+    return jsonify({
+        "status": "success",
+        "data": {"job_id": job_id, "status": "queued"}
+    }), 202
+
+@app.route('/api/pcap/info/<job_or_sample>')
+def pcap_info(job_or_sample):
+    if not pcap_processor: return jsonify({"error": "Service unavailable"}), 503
+    
+    file_path = None
+    
+    # Check if job
+    job = pcap_processor.get_job_status(job_or_sample)
+    if job:
+        file_path = job['file_path']
+    else:
+        # Check if sample
+        samples = pcap_processor.get_sample_files()
+        file_path = next((s['path'] for s in samples if s['name'] == job_or_sample), None)
+        
+    if not file_path or not os.path.exists(file_path):
+        return jsonify({"status": "error", "message": "File not found"}), 404
+        
+    try:
+        info = pcap_processor.get_pcap_info(file_path)
+        return jsonify({"status": "success", "data": info})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 # --- Error Handling ---
 

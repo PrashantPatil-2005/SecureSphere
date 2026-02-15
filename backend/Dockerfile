@@ -17,7 +17,10 @@ COPY . .
 # Expose port
 EXPOSE 8000
 
-# Health check
+# Create upload and sample directories
+RUN mkdir -p /app/uploads/pcap /app/samples/pcap
+
+# Run gunicornheck
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:8000/api/health || exit 1
 

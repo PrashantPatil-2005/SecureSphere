@@ -225,6 +225,14 @@ pcap-info: ## Show .pcap file info (usage: make pcap-info FILE=file.pcap)
 pcap-demo: ## Interactive PCAP demo menu
 	@bash scripts/pcap_demo.sh
 
+pcap-dashboard: ## Open dashboard PCAP Analysis tab
+	@echo "Open http://localhost:3000 and click 'PCAP Analysis' tab"
+	@make open-dashboard
+
+pcap-dashboard: ## Open dashboard PCAP Analysis tab
+	@echo "Open http://localhost:3000 and click 'PCAP Analysis' tab"
+	@make open-dashboard
+
 pcap-full-demo: ## Generate + analyze + show results (one command)
 	@bash scripts/pcap_demo.sh <<< "5"
 
