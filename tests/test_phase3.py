@@ -143,9 +143,11 @@ class TestAuthMonitor:
 
     def test_credential_stuffing_detection(self, redis_client):
         # Need to be fast to trigger stuffing
-        users = ["u1", "u2", "u3", "u4", "u5", "u6"]
+        # Increase user count to ensure threshold is hit even if some are dropped/existing
+        users = [f"stuffing_user_{i}" for i in range(10)]
         for u in users:
             requests.post(f"{AUTH_URL}/auth/login", json={"username": u, "password": "wrong"})
+            time.sleep(0.1) # Small delay to ensure order
             
         # 2. Check Event
         event = wait_for_event(redis_client, "events:auth", "credential_stuffing")
