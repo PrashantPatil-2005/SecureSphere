@@ -131,8 +131,19 @@ if [ ! -z "$NETMON_RUNNING" ]; then
     echo -e "${GREEN}PASS${NC}"
     PASS=$((PASS + 1))
 else
-    echo -e "${RED}FAIL${NC}"
     echo "  Network Monitor container not running"
+    FAIL=$((FAIL + 1))
+fi
+
+# ---- Check Backend API ----
+echo -n "Checking Backend API... "
+BACKEND_HEALTH=$(curl -s http://localhost:8000/api/health 2>/dev/null)
+if echo "$BACKEND_HEALTH" | grep -q '"status": "healthy"'; then
+    echo -e "${GREEN}PASS${NC}"
+    PASS=$((PASS + 1))
+else
+    echo -e "${RED}FAIL${NC}"
+    echo "  Backend API not healthy"
     FAIL=$((FAIL + 1))
 fi
 

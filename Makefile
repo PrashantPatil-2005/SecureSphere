@@ -129,3 +129,25 @@ logs-authmon:
 
 monitor-events:
 	docker exec -it securisphere-redis redis-cli SUBSCRIBE security_events
+
+# Phase 4 Targets
+build-backend:
+	docker-compose build backend
+
+start-backend:
+	docker-compose up -d backend
+
+stop-backend:
+	docker-compose stop backend
+
+logs-backend:
+	docker-compose logs -f backend
+
+test-backend:
+	bash scripts/test_backend.sh
+
+test-phase4:
+	python -m pytest tests/test_phase4.py -v
+
+shell-backend:
+	docker exec -it securisphere-backend /bin/bash
