@@ -177,6 +177,20 @@ echo "  Results: ${GREEN}$PASS passed${NC}, ${RED}$FAIL failed${NC}"
 echo "========================================="
 echo ""
 
+# ---- System Component Summary ----
+echo ""
+echo "═══════════════════════════════════════════════"
+echo "  System Component Summary"
+echo "═══════════════════════════════════════════════"
+echo "  Redis:              $(echo $REDIS_PING | grep -q PONG && echo '✅' || echo '❌')"
+echo "  PostgreSQL:         $(echo $PG_READY | grep -q accepting && echo '✅' || echo '❌')"
+echo "  API Server:         $(curl -s http://localhost:5000/api/health | grep -q healthy && echo '✅' || echo '❌')"
+echo "  Auth Service:       $(curl -s http://localhost:5001/auth/status | grep -q running && echo '✅' || echo '❌')"
+echo "  Backend API:        $(curl -s http://localhost:8000/api/health | grep -q healthy && echo '✅' || echo '❌')"
+echo "  Correlation Engine: $(curl -s http://localhost:5070/engine/health | grep -q running && echo '✅' || echo '❌')"
+echo "═══════════════════════════════════════════════"
+echo ""
+
 if [ $FAIL -gt 0 ]; then
     exit 1
 else

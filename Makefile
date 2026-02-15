@@ -214,3 +214,13 @@ demo:
 
 run-demo:
 	bash scripts/run_demo.sh
+
+# Phase 8: Evaluation
+evaluate:
+	python evaluation/run_evaluation.py
+
+test-integration:
+	python -m pytest tests/test_integration.py -v
+
+run-evaluation:
+	bash scripts/run_evaluation.sh

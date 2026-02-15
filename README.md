@@ -174,6 +174,20 @@ make demo
 make run-demo
 ```
 
+## Phase 8: Integration Testing & Evaluation
+
+### Running Tests
+```bash
+# Integration tests only
+make test-integration
+
+# Full evaluation (all scenarios + metrics)
+make evaluate
+
+# Complete evaluation suite (tests + evaluation)
+make run-evaluation
+```
+
 ## Database Schema
 
 - **security_events**: Raw security events from all monitors

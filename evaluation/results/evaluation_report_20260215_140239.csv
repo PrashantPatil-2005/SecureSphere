@@ -1,0 +1,6 @@
+Scenario,Raw Events,Incidents,Detection Rate (%),FPR,ARR (%),MTTD (s),Correlation Accuracy (%)
+Benign Traffic,1,1,N/A,0.0,0.0,1.5,100.0
+Full Kill Chain,6,4,100.0,0.0,33.3,1.5,100.0
+API Abuse,4,2,100.0,0.0,50.0,1.5,100.0
+Credential Attack,1,1,100.0,0.0,0.0,1.5,100.0
+Stealth Attack,3,1,100.0,0.0,66.7,1.5,100.0

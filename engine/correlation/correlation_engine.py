@@ -54,7 +54,9 @@ class CorrelationEngine:
             self.rule_api_auth_combined,
             self.rule_distributed_attack,
             self.rule_data_exfiltration,
-            self.rule_persistent_threat
+            self.rule_persistent_threat,
+            self.rule_brute_force_attempt,
+            self.rule_critical_exploit_attempt
         ]
         
         self.stats = {
@@ -438,6 +440,51 @@ class CorrelationEngine:
                     )
         return None
 
+    def rule_brute_force_attempt(self, new_event, buffer):
+        if new_event.get('event_type') not in ['brute_force', 'credential_stuffing']:
+            return None
+            
+        source_ip = new_event.get('source_entity', {}).get('ip')
+        if not source_ip or self.check_cooldown('brute_force_attempt', source_ip):
+            return None
+
+        # Create incident immediately for these high-confidence events from monitors
+        self.set_cooldown('brute_force_attempt', source_ip)
+        return self.create_incident(
+            "brute_force_attempt",
+            "🔐 Brute Force / Stuffing Attempt",
+            f"Source {source_ip} detected performing {new_event['event_type']}.",
+            "medium", 0.80, source_ip, [new_event], ["auth"],
+            ["T1110"], ["Block IP", "Reset Password"]
+        )
+
+    def rule_critical_exploit_attempt(self, new_event, buffer):
+        if new_event.get('severity', {}).get('level') != 'critical' and new_event.get('event_type') not in ['sql_injection', 'xss', 'path_traversal']:
+            return None
+            
+        source_ip = new_event.get('source_entity', {}).get('ip')
+        if not source_ip or self.check_cooldown('critical_exploit', source_ip):
+            return None
+
+        # Require at least 2 events to reduce False Positives from single probes/scans
+        # Stealth scenario sends 3 events, so it will still be detected.
+        ip_events = [e for e in buffer 
+                     if e.get('source_entity', {}).get('ip') == source_ip 
+                     and e.get('event_type') == new_event.get('event_type')]
+        
+        # Buffer includes new_event if processed correctly, or we check len >= 2
+        # process_event adds to buffer before calling rules.
+        if len(ip_events) >= 2:
+            self.set_cooldown('critical_exploit', source_ip)
+            return self.create_incident(
+                "critical_exploit_attempt",
+                "🛡️ Critical Exploit Attempt",
+                f"Source {source_ip} detected performing {new_event['event_type']} ({len(ip_events)} times).",
+                "high", 0.90, source_ip, ip_events, ["api"],
+                ["T1190"], ["Block IP", "Patch Vulnerability"]
+            )
+        return None
+
     # --- PROCESSING ---
 
     def process_event(self, event_data):
@@ -517,6 +564,7 @@ class CorrelationEngine:
                 "events_processed": self.stats['events_processed'],
                 "incidents_created": self.stats['incidents_created'],
                 "active_risks": len(self.risk_scores),
+                "active_rules": len(self.rules),
                 "uptime": (datetime.now() - self.stats['start_time']).total_seconds()
             })
             
@@ -533,6 +581,22 @@ class CorrelationEngine:
                 "status": "success", 
                 "data": {k: v for k, v in self.risk_scores.items()}
             })
+
+        @self.app.route('/engine/reset', methods=['POST'])
+        def reset():
+            with self.buffer_lock:
+                self.event_buffer = []
+            self.risk_scores.clear()
+            self.redis.delete("risk_scores_current")
+            self.recent_incidents = []
+            self.incident_cooldowns = {}
+            self.stats = {
+                'events_processed': 0,
+                'incidents_created': 0,
+                'rules_triggered': defaultdict(int),
+                'start_time': datetime.now()
+            }
+            return jsonify({"status": "reset_complete"})
 
     def run_flask(self):
         self.app.run(host='0.0.0.0', port=5070, use_reloader=False)
