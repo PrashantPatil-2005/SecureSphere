@@ -212,6 +212,14 @@ attack-all:
 demo:
 	docker-compose run --rm attack-simulator full_kill_chain --delay demo
 
+# One-command full demo (interactive)
+demo-full:
+	@echo "Starting SecuriSphere Demo Mode..."
+	@make start
+	@echo "Waiting for services to initialize..."
+	@sleep 10
+	@bash scripts/run_demo.sh
+
 run-demo:
 	bash scripts/run_demo.sh
 

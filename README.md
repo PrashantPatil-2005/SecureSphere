@@ -1,218 +1,268 @@
-# SecuriSphere
-> A multi-layer cybersecurity monitoring and threat correlation framework for containerized environments.
+# 🛡️ SecuriSphere
+
+**Multi-Layer Cybersecurity Monitoring and Threat Correlation Framework for Containerized Environments**
+
+---
+
+## Table of Contents
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Features](#features)
+- [Quick Start](#quick-start)
+- [System Components](#system-components)
+- [Correlation Rules](#correlation-rules)
+- [Risk Scoring](#risk-scoring)
+- [Attack Simulator](#attack-simulator)
+- [Evaluation](#evaluation)
+- [Dashboard](#dashboard)
+- [API Reference](#api-reference)
+- [Configuration](#configuration)
+- [Troubleshooting](#troubleshooting)
+- [Contributing](#contributing)
+- [License](#license)
+
+---
+
+## Overview
+
+SecuriSphere is a comprehensive, open-source cybersecurity framework designed to monitor, detect, and correlate threats across multiple layers of a modern microservices application. By integrating Network, API, and Authentication monitoring into a unified correlation engine, SecuriSphere detects complex "low-and-slow" attacks that often bypass single-layer defenses. It provides real-time visibility through a React-based dashboard and includes a built-in attack simulator for validating defenses against real-world scenarios like SQL Injection, Brute Force, and Privilege Escalation.
+
+Designed for DevSecOps teams and security researchers, SecuriSphere demonstrates how to implement correlation logic, risk scoring, and automated incident response in containerized environments.
+
+---
 
 ## Architecture
 
-```ascii
-+----------------+      +----------------+      +----------------+
-|  Monitor Layer | ---> |  Event Bus     | ---> |  Engine Layer  |
-| (Net, API, Auth)|     | (Redis Pub/Sub)|      | (Correlation)  |
-+----------------+      +----------------+      +----------------+
-                                                        |
-                                                        v
-+----------------+      +----------------+      +----------------+
-|   Dashboard    | <--- |    Database    | <--- |   Backend      |
-|    (React)     |      |  (PostgreSQL)  |      |    (API)       |
-+----------------+      +----------------+      +----------------+
+```mermaid
+graph TD
+    User((User/Attacker)) --> Target[Target Environment]
+    
+    subgraph "Target Environment"
+        API[API Server :5000]
+        Auth[Auth Service :5001]
+        DB[(Postgres :5432)]
+    end
+    
+    subgraph "Monitoring Layer"
+        NetMon[Network Monitor]
+        APIMon[API Monitor :5050]
+        AuthMon[Auth Monitor :5060]
+    end
+    
+    subgraph "Processing Layer"
+        Redis[(Redis Event Bus :6379)]
+        Engine[Correlation Engine :5070]
+    end
+    
+    subgraph "Presentation Layer"
+        Backend[Backend API :8000]
+        Dash[React Dashboard :3000]
+    end
+    
+    Target --> NetMon
+    Target --> APIMon
+    Target --> AuthMon
+    
+    NetMon --> Redis
+    APIMon --> Redis
+    AuthMon --> Redis
+    
+    Redis --> Engine
+    Engine --> Redis
+    Redis --> Backend
+    Backend --> Dash
 ```
 
-## Prerequisites
+### Data Flow
+1. **Attack Occurs**: Malicious traffic hits the Target services.
+2. **Detection**: Monitors capture logs/traffic, apply immediate detection rules (e.g., regex for SQLi), and publish normalized events to Redis.
+3. **Correlation**: The Engine consumes events, updates risk scores, and checks for multi-event patterns (Rules).
+4. **Response**: If a rule triggers, an Incident is created and published.
+5. **Visualization**: The Backend pushes updates via WebSocket to the Dashboard for real-time alerts.
 
-- [Docker](https://docs.docker.com/get-docker/)
-- [Docker Compose](https://docs.docker.com/compose/install/)
-- [Git](https://git-scm.com/downloads)
+---
+
+## Features
+
+- **Real-time Multi-Layer Monitoring**: Simultaneous visibility into Network traffic, API requests, and Authentication events.
+- **Unified Event Schema**: All events are normalized to a standard JSON format inspired by OCSF.
+- **Advanced Correlation Engine**: 7 built-in rules detect complex kill chains, not just isolated alerts.
+- **Dynamic Risk Scoring**: Entity-based risk scoring with cross-layer bonuses and time-based decay.
+- **Automated Attack Simulator**: On-demand generation of 5 attack scenarios (including Stealth and Full Kill Chain).
+- **Interactive Dashboard**: React-based UI with live event feeds, risk heatmaps, and incident metrics.
+- **Quantitative Evaluation**: Built-in framework to measure Detection Rate, False Positive Rate, and MTTD.
+- **Docker-First Design**: Entire stack deploys with a single command.
+
+---
 
 ## Quick Start
 
-1. **Clone the repository**
+### Prerequisites
+- Docker Desktop (v20.10+)
+- Docker Compose (v2.0+)
+- 4GB+ RAM available
+- Ports 3000, 5000-5001, 5050-5070, 6379, 8000 available.
+
+### Installation & Run
+
+1. **Clone the Repository**
    ```bash
-   git clone https://github.com/your/securisphere.git
+   git clone https://github.com/yourusername/securisphere.git
    cd securisphere
    ```
 
-2. **Setup the environment**
+2. **Start the System**
    ```bash
-   make setup
+   make setup    # First time only (database init)
+   make start    # Starts all containers
    ```
 
-3. **Start the application**
+3. **Verify Deployment**
    ```bash
-   make start
+   make health   # Checks status of all services
    ```
 
-## Phase 1 Status
+4. **Access the Dashboard**
+   Open [http://localhost:3000](http://localhost:3000) in your browser.
 
-Phase 1 completes the project foundation:
-- [x] Project structure
-- [x] Docker Compose with Redis & PostgreSQL
-- [x] Database Schema
-- [x] Basic Scripts & Makefile
+5. **Run a Demo Attack**
+   ```bash
+   make run-demo  # Interactive menu to launch attacks
+   ```
 
-**To verify Phase 1:**
-Run `make health` to check if Redis and PostgreSQL are up and running correctly.
+---
 
-## Available Commands
+## System Components
 
-| Command | Description |
-|---------|-------------|
-| `make setup` | Run initial setup (create .env, dirs, start db) |
-| `make start` | Start all services |
-| `make stop` | Stop all services |
-| `make reset` | Stop services and remove all data volumes |
-| `make health` | Run health checks |
-| `make logs` | View logs from all containers |
-| `make shell-db` | Access PostgreSQL shell |
-| `make shell-redis` | Access Redis shell |
-| `make test-api` | Run curl tests for API Server |
-| `make test-auth` | Run curl tests for Auth Service |
-| `make test-phase2` | Run full pytest suite for Phase 2 |
-| `make build-frontend` | Build the React dashboard |
-| `make start-frontend` | Start the dashboard service |
-| `make open-dashboard` | Open dashboard in browser |
+| Service | Port | Description |
+|---------|------|-------------|
+| **securisphere-dashboard** | 3000 | Frontend UI (React + Tailwind) |
+| **securisphere-api** | 5000 | Vulnerable Target API (Flask) |
+| **securisphere-auth** | 5001 | Target Auth Service (Flask) |
+| **securisphere-apimon** | 5050 | Detects SQLi, XSS, Path Traversal |
+| **securisphere-authmon** | 5060 | Detects Brute Force, Cred Stuffing |
+| **securisphere-correlator** | 5070 | Core Logic: Rules + Risk Scoring |
+| **securisphere-backend** | 8000 | Aggregates data for Dashboard |
+| **securisphere-redis** | 6379 | Event Bus & State Store |
+| **securisphere-db** | 5432 | User & Product Database |
 
-## Phase 2: Target Services
+---
 
-### API Server (Port 5000)
-Intentionally vulnerable Flask API simulating an e-commerce backend.
-- **GET /api/products/search?q=**: Vulnerable to SQL Injection
-- **GET /api/files?name=**: Vulnerable to Path Traversal
-- **GET /api/admin/config**: Vulnerable to Broken Access Control (No Auth)
-- **GET /api/admin/users/export**: Vulnerable to Sensitive Data Exposure
+## Correlation Rules
 
-### Auth Service (Port 5001)
-Authentication service tracking login attempts.
-- **POST /auth/login**: Login handler
-- **Lockout Mechanism**: Account locked after 5 failed attempts
-- **POST /auth/reset/<username>**: Reset locked account
+The engine currently implements 7 heuristic rules:
 
-## Phase 5: Dashboard (Port 3000)
+1. **Reconnaissance followed by Exploitation**: Port scan (Network) followed by SQLi/XSS (API).
+2. **Credential Compromise**: Brute force attempts followed by a successful login.
+3. **Full Kill Chain**: Detects activity across all 3 layers (Net -> Auth -> API) targeting the same asset.
+4. **Automated Attack Tooling**: High-frequency API errors combined with Auth failures.
+5. **Distributed Credential Attack**: Multiple source IPs targeting the same user account.
+6. **Data Exfiltration**: Successful exploit followed by accessing sensitive endpoints/bulk export.
+7. **Persistent Threat / Stealth**: 
+   - *Standard*: High event volume (>10) in short window.
+   - *Stealth Mode*: Detects isolated Critical events (e.g., single SQLi) that attempt to evade frequency filters.
 
-### Tabs
-- **Dashboard**: Overview with metrics, layer activity, timeline chart, recent events
-- **Events**: Filterable event list with detail modal
-- **Incidents**: Correlated incidents (populated after Phase 6)
-- **Risk Scores**: Entity risk scores (populated after Phase 6)
-- **System**: System status for all components
+---
 
-### Features
-- Real-time updates via WebSocket
-- Dark cybersecurity theme
-- Responsive design
-- Event filtering by layer and severity
-- Click events for full detail view
-- Connection status indicator
+## Risk Scoring
 
-### Access
-Open [http://localhost:3000](http://localhost:3000) in your browser.
+Risk is tracked per Source Entity (IP Address).
 
-## Environment Variables
+- **Base Scores**:
+  - Low Severity Event: +10
+  - Medium Severity Event: +25
+  - High Severity Event: +50
+  - Critical Severity Event: +100
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `REDIS_PORT` | Port for Redis | 6379 |
-| `POSTGRES_PORT` | Port for PostgreSQL | 5432 |
-| `POSTGRES_DB` | Database name | securisphere_db |
-| `MONITOR_INTERFACE` | Network interface to monitor | eth0 |
-| `FRONTEND_PORT` | Port for Dashboard | 3000 |
-| `REACT_APP_BACKEND_URL` | Connect URL for Frontend | http://localhost:8000 |
+- **Multipliers**:
+  - **Cross-Layer Bonus**: Events detected on multiple layers trigger a 1.5x multiplier.
 
-See `.env.example` for all available configuration options.
+- **Decay**:
+  - Scores decay by 5 points every minute to allow "cooling off" of benign anomalies.
 
-## Phase 6: Correlation Engine (Port 5070)
+- **Thresholds**:
+  - **Normal**: 0 - 30
+  - **Suspicious**: 31 - 70
+  - **Threatening**: 71 - 150
+  - **Critical**: >150 (Triggers immediate blocking recommendation)
 
-The "Brain" of SecuriSphere. It consumes normalized events from Redis, applies correlation rules, and publishes actionable incidents.
+---
 
-### Correlation Rules
-| Rule | Pattern | Severity |
-|------|---------|----------|
-| **Recon → Exploit** | Port scan + SQLi/PathTraversal from same IP | Critical |
-| **Credential Compromise** | Brute force + successful login | Critical |
-| **Full Kill Chain** | Attacks on Network + API + Auth layers from same IP | Critical |
-| **Automated Tool** | API abuse + Auth attack combined | High |
-| **Distributed Attack** | 3+ IPs targeting same account | Critical |
-| **Data Exfiltration** | Exploitation + sensitive access | High |
-| **Persistent Threat** | 10+ events over 5+ minutes | High |
+## Attack Simulator
 
-### Risk Scoring
-- **Points**: Low (+10), Medium (+25), High (+50), Critical (+100)
-- **Bonus**: ×1.5 for cross-layer attacks
-- **Decay**: -5 points every minute
-- **Levels**: Normal (0-30), Suspicious (31-70), Threatening (71-150), Critical (151+)
+SecuriSphere includes a Python-based attack simulator (`simulation/`) that acts as a Red Team agent.
 
-### Health & Stats
-- Health: `GET http://localhost:5070/engine/health`
-- Stats: `GET http://localhost:5070/engine/stats`
-- Risk Scores: `GET http://localhost:5070/engine/risk-scores`
+**Available Scenarios:**
+1. **Full Kill Chain**: Port Scan -> Brute Force -> Admin Login -> SQL Injection -> Data Exfiltration.
+2. **API Abuse**: High-volume Fuzzing, XSS attempts, and Broken Object Level Authorization (BOLA) checks.
+3. **Credential Stuffing**: Distributed brute force attack from multiple spoofed IPs.
+4. **Stealth Attack**: "Low and Slow" execution of a single critical exploit to test detection sensitivity.
+5. **Benign Traffic**: Generates normal user behavior (browsing, searching, logging in) to test False Positive rates.
 
-## Phase 7: Attack Simulator
-
-### Available Scenarios
-| # | Scenario | Description | Expected Correlations |
-|---|----------|-------------|----------------------|
-| 1 | Full Kill Chain | Multi-stage: recon→exploit→creds→exfil | Kill Chain, Recon→Exploit, API+Auth |
-| 2 | API Abuse | Enumeration, fuzzing, SQLi, data access | Data Exfiltration, Persistent Threat |
-| 3 | Credential Attack | Brute force, stuffing, lockout DoS | Credential Compromise, Lockout Storm |
-| 4 | Benign Traffic | Normal usage patterns | None (false positive test) |
-| 5 | Stealth Attack | Low-and-slow methodology | Persistent Threat (delayed) |
-
-### Running Attacks
+Usage:
 ```bash
-# Individual scenarios
 make attack-killchain
-make attack-api
-make attack-creds
-make attack-benign
 make attack-stealth
-
-# All scenarios
-make attack-all
-
-# Demo mode (slow, for presentation)
-make demo
-
-# Interactive menu
-make run-demo
+make attack-benign
 ```
 
-## Phase 8: Integration Testing & Evaluation
+---
 
-### Running Tests
+## Evaluation
+
+The framework includes a self-evaluation suite that runs all scenarios and calculates performance metrics.
+
+**Metrics:**
+- **Detection Rate (DR)**: % of attacks correctly identified.
+- **False Positive Rate (FPR)**: % of benign actions incorrectly flagged.
+- **Alert Reduction Ratio**: Ratio of Raw Events to Correlated Incidents (Efficiency).
+- **Mean Time To Detect (MTTD)**: Time from first attack event to Incident creation.
+
+Run Evaluation:
 ```bash
-# Integration tests only
-make test-integration
-
-# Full evaluation (all scenarios + metrics)
 make evaluate
-
-# Complete evaluation suite (tests + evaluation)
-make run-evaluation
 ```
 
-## Database Schema
+---
 
-- **security_events**: Raw security events from all monitors
-- **correlated_incidents**: High-level incidents generated by correlation engine
-- **risk_scores**: Dynamic risk scores for entities (IPs, users)
-- **baseline_metrics**: Statistical baselines for anomaly detection
+## Dashboard
+
+The React Dashboard provides:
+- **Live Event Feed**: Real-time stream of raw security events.
+- **Incident Timeline**: Correlated alerts with drill-down details.
+- **Risk Heatmap**: Visual representation of active threats by IP.
+- **System Health**: Status of all containers and Redis connectivity.
+- **Stats Overview**: Total events, active incidents, and reduction metrics.
+
+---
+
+## Configuration
+
+Environment variables in `.env` control system behavior:
+
+- `REDIS_HOST`, `REDIS_PORT`: Redis connection details.
+- `POSTGRES_USER`, `POSTGRES_PASSWORD`: Database credentials.
+- `LOG_LEVEL`: Logging verbosity (INFO/DEBUG).
+- `SIMULATION_DELAY`: Speed of attack simulation.
+
+---
 
 ## Troubleshooting
 
-- **Database connection failed**: Ensure `make setup` ran successfully and containers are healthy.
-- **Redis connection failed**: Check `make logs-redis` for errors.
-- **Port conflicts**: Modify ports in `.env` if 5432 or 6379 are taken.
-- **Dashboard not loading**: Ensure backend is running (`make health`) and port 3000 is open.
+See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for detailed solutions to common problems like:
+- Redis connection failures
+- Docker volume permission issues
+- Port conflicts
+- WebSocket disconnection
 
-## Project Phases
+---
 
-| Phase | Description | Status |
-|-------|-------------|--------|
-| 1 | Foundation & Infrastructure | ✅ |
-| 2 | Target Services (API, Auth) | ✅ |
-| 3 | Security Monitors | ✅ |
-| 4 | Event Normalization | ✅ |
-| 5 | Backend API | ✅ |
-| 6 | Frontend Dashboard | ✅ |
-| 7 | Correlation Engine | ⬜ |
-| 8 | Risk Scoring | ⬜ |
-| 9 | Attack Simulation | ⬜ |
-| 10 | Integration Testing | ⬜ |
+## Contributing
+
+We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on code style, testing, and pull requests.
+
+---
+
+## License
+
+MIT License. See [LICENSE](LICENSE) file for details.

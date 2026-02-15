@@ -17,28 +17,53 @@ echo "║  0. Exit                                         ║"
 echo "║                                                  ║"
 echo "╚══════════════════════════════════════════════════╝"
 echo ""
-read -p "Select option: " choice
+echo ""
+# Check if argument is provided
+if [ -n "$1" ]; then
+    choice=$1
+else
+    echo -n "Select option: "
+    read choice
+fi
+
+echo ""
+echo "----------------------------------------------------------------"
 
 case $choice in
   1)
+    echo "This will run the full kill chain scenario."
+    echo "Duration: ~30 seconds"
+    read -p "Press Enter to launch attack..."
     docker-compose run --rm attack-simulator full_kill_chain
     ;;
   2)
+    echo "Running API Abuse Campaign..."
     docker-compose run --rm attack-simulator api_abuse
     ;;
   3)
+    echo "Running Credential Attack Campaign..."
     docker-compose run --rm attack-simulator credential_attack
     ;;
   4)
+    echo "Running Benign Traffic Simulation."
+    echo "Expect: Green events, No Incidents."
+    read -p "Press Enter to start..."
     docker-compose run --rm attack-simulator benign
     ;;
   5)
+    echo "Running Stealth Attack (Low and Slow)."
+    echo "Expect: Single Critical Incident."
+    read -p "Press Enter to start..."
     docker-compose run --rm attack-simulator stealth
     ;;
   6)
+    echo "Running ALL Scenarios sequentially..."
     docker-compose run --rm attack-simulator all
     ;;
   7)
+    echo "Running Full Kill Chain in DEMO MODE (Slow)."
+    echo "Events will be spaced out for narration."
+    read -p "Press Enter to start..."
     docker-compose run --rm attack-simulator full_kill_chain --delay demo
     ;;
   0)
