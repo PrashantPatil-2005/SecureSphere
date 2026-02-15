@@ -186,3 +186,31 @@ test-correlation:
 
 engine-stats:
 	curl -s http://localhost:5070/engine/stats | python3 -m json.tool || echo "Failed to fetch stats"
+
+# Phase 7: Attack Simulator
+build-simulator:
+	docker-compose build attack-simulator
+
+attack-killchain:
+	docker-compose run --rm attack-simulator full_kill_chain
+
+attack-api:
+	docker-compose run --rm attack-simulator api_abuse
+
+attack-creds:
+	docker-compose run --rm attack-simulator credential_attack
+
+attack-benign:
+	docker-compose run --rm attack-simulator benign
+
+attack-stealth:
+	docker-compose run --rm attack-simulator stealth
+
+attack-all:
+	docker-compose run --rm attack-simulator all
+
+demo:
+	docker-compose run --rm attack-simulator full_kill_chain --delay demo
+
+run-demo:
+	bash scripts/run_demo.sh

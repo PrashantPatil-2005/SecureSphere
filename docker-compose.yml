@@ -277,6 +277,35 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  attack-simulator:
+    build:
+      context: ./simulation
+      dockerfile: Dockerfile
+    container_name: securisphere-attacker
+    networks:
+      - securisphere-network
+    depends_on:
+      api-server:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+      correlation-engine:
+        condition: service_healthy
+    profiles:
+      - attack
+    environment:
+      API_URL: http://api-server:5000
+      AUTH_URL: http://auth-service:5001
+      BACKEND_URL: http://backend:8000
+      ENGINE_URL: http://correlation-engine:5070
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 networks:
   securisphere-network:
     driver: bridge

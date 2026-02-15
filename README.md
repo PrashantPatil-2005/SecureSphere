@@ -144,6 +144,36 @@ The "Brain" of SecuriSphere. It consumes normalized events from Redis, applies c
 - Stats: `GET http://localhost:5070/engine/stats`
 - Risk Scores: `GET http://localhost:5070/engine/risk-scores`
 
+## Phase 7: Attack Simulator
+
+### Available Scenarios
+| # | Scenario | Description | Expected Correlations |
+|---|----------|-------------|----------------------|
+| 1 | Full Kill Chain | Multi-stage: recon→exploit→creds→exfil | Kill Chain, Recon→Exploit, API+Auth |
+| 2 | API Abuse | Enumeration, fuzzing, SQLi, data access | Data Exfiltration, Persistent Threat |
+| 3 | Credential Attack | Brute force, stuffing, lockout DoS | Credential Compromise, Lockout Storm |
+| 4 | Benign Traffic | Normal usage patterns | None (false positive test) |
+| 5 | Stealth Attack | Low-and-slow methodology | Persistent Threat (delayed) |
+
+### Running Attacks
+```bash
+# Individual scenarios
+make attack-killchain
+make attack-api
+make attack-creds
+make attack-benign
+make attack-stealth
+
+# All scenarios
+make attack-all
+
+# Demo mode (slow, for presentation)
+make demo
+
+# Interactive menu
+make run-demo
+```
+
 ## Database Schema
 
 - **security_events**: Raw security events from all monitors
