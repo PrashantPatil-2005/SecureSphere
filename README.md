@@ -10,6 +10,7 @@
 - [Features](#features)
 - [Quick Start](#quick-start)
 - [System Components](#system-components)
+- [ShopSphere — Live Demo Web App](#-shopsphere--live-demo-web-app)
 - [Correlation Rules](#correlation-rules)
 - [Risk Scoring](#risk-scoring)
 - [Attack Simulator](#attack-simulator)
@@ -35,11 +36,11 @@ Designed for DevSecOps teams and security researchers, SecuriSphere demonstrates
 
 ```mermaid
 graph TD
-    User((User/Attacker)) --> Target[Target Environment]
+    User((User/Attacker)) --> WebApp["ShopSphere Web App :8080"]
     
     subgraph "Target Environment"
-        API[API Server :5000]
-        Auth[Auth Service :5001]
+        WebApp --> API[API Server :5000]
+        WebApp --> Auth[Auth Service :5001]
         DB[(Postgres :5432)]
     end
     
@@ -59,9 +60,9 @@ graph TD
         Dash[React Dashboard :3000]
     end
     
-    Target --> NetMon
-    Target --> APIMon
-    Target --> AuthMon
+    API --> NetMon
+    API --> APIMon
+    Auth --> AuthMon
     
     NetMon --> Redis
     APIMon --> Redis
@@ -90,6 +91,7 @@ graph TD
 - **Dynamic Risk Scoring**: Entity-based risk scoring with cross-layer bonuses and time-based decay.
 - **Automated Attack Simulator**: On-demand generation of 5 attack scenarios (including Stealth and Full Kill Chain).
 - **Interactive Dashboard**: React-based UI with live event feeds, risk heatmaps, and incident metrics.
+- **ShopSphere Victim Web App**: A realistic e-commerce frontend for live SQL Injection and Brute Force demonstrations.
 - **Quantitative Evaluation**: Built-in framework to measure Detection Rate, False Positive Rate, and MTTD.
 - **Docker-First Design**: Entire stack deploys with a single command.
 
@@ -101,7 +103,7 @@ graph TD
 - Docker Desktop (v20.10+)
 - Docker Compose (v2.0+)
 - 4GB+ RAM available
-- Ports 3000, 5000-5001, 5050-5070, 6379, 8000 available.
+- Ports 3000, 5000-5001, 5050-5070, 6379, 8000, 8080 available.
 
 ### Installation & Run
 
@@ -122,8 +124,9 @@ graph TD
    make health   # Checks status of all services
    ```
 
-4. **Access the Dashboard**
-   Open [http://localhost:3000](http://localhost:3000) in your browser.
+4. **Access the Applications**
+   - ShopSphere (Victim Store): [http://localhost:8080](http://localhost:8080)
+   - Security Dashboard: [http://localhost:3000](http://localhost:3000)
 
 5. **Run a Demo Attack**
    ```bash
@@ -136,7 +139,8 @@ graph TD
 
 | Service | Port | Description |
 |---------|------|-------------|
-| **securisphere-dashboard** | 3000 | Frontend UI (React + Tailwind) |
+| **securisphere-webapp** | 8080 | ShopSphere Victim E-commerce (Nginx) |
+| **securisphere-dashboard** | 3000 | Security Dashboard UI (React + Tailwind) |
 | **securisphere-api** | 5000 | Vulnerable Target API (Flask) |
 | **securisphere-auth** | 5001 | Target Auth Service (Flask) |
 | **securisphere-apimon** | 5050 | Detects SQLi, XSS, Path Traversal |
@@ -145,6 +149,36 @@ graph TD
 | **securisphere-backend** | 8000 | Aggregates data for Dashboard |
 | **securisphere-redis** | 6379 | Event Bus & State Store |
 | **securisphere-db** | 5432 | User & Product Database |
+
+---
+
+## 🛒 ShopSphere — Live Demo Web App
+
+ShopSphere is a purpose-built "victim" e-commerce website that serves as the attack surface during live security demonstrations. It runs on **port 8080** and proxies requests to the backend API and Auth services through Nginx.
+
+### Demo Flow
+
+1. **Open ShopSphere**: Navigate to [http://localhost:8080](http://localhost:8080) — products load from the API server.
+2. **SQL Injection Demo**: In the search bar, type `' OR '1'='1` and press Search. The query is forwarded to the vulnerable API, and the Security Dashboard ([http://localhost:3000](http://localhost:3000)) detects it in real-time.
+3. **Brute Force Demo**: Click **Login** (or go to [http://localhost:8080/login.html](http://localhost:8080/login.html)). Enter username `admin` and try passwords like `pass1`, `pass2`, `pass3`, etc. The Dashboard detects the repeated failed login attempts.
+
+### Architecture
+
+```
+Browser ──► :8080 (Nginx)
+               ├── /           → Static HTML (index.html, login.html)
+               ├── /api/*      → Reverse Proxy → api-server:5000
+               └── /auth/*     → Reverse Proxy → auth-service:5001
+```
+
+### Files
+
+| File | Purpose |
+|------|--------|
+| `targets/web-app/Dockerfile` | Nginx Alpine container for static serving + reverse proxy |
+| `targets/web-app/nginx.conf` | Server block with proxy rules for `/api/` and `/auth/` |
+| `targets/web-app/html/index.html` | E-commerce homepage with product grid and search bar |
+| `targets/web-app/html/login.html` | Login page with brute force attempt counter and shake animation |
 
 ---
 
