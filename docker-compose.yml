@@ -311,6 +311,21 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  web-app:
+    build:
+      context: ./targets/web-app
+      dockerfile: Dockerfile
+    container_name: securisphere-webapp
+    hostname: web-app
+    networks:
+      - securisphere-network
+    ports:
+      - "8080:80"
+    depends_on:
+      - api-server
+      - auth-service
+    restart: unless-stopped
+
 networks:
   securisphere-network:
     driver: bridge

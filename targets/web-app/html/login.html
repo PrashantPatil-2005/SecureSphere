@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - ShopSphere</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        body {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+        }
+
+        .login-card {
+            width: 100%;
+            max-width: 420px;
+            border-radius: 16px;
+            border: none;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
+            overflow: hidden;
+        }
+
+        .login-header {
+            background: transparent;
+            text-align: center;
+            padding: 2rem 2rem 1rem;
+        }
+
+        .login-header h3 {
+            margin-bottom: 0.25rem;
+        }
+
+        .login-header p {
+            margin-bottom: 0;
+            color: #6c757d;
+        }
+
+        .form-control:focus {
+            border-color: #667eea;
+            box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.25);
+        }
+
+        .btn-login {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border: none;
+            padding: 0.7rem;
+            font-size: 1.05rem;
+            font-weight: 600;
+            border-radius: 8px;
+            color: white;
+            width: 100%;
+            transition: all 0.3s ease;
+        }
+
+        .btn-login:hover {
+            opacity: 0.9;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 15px rgba(102, 126, 234, 0.4);
+            color: white;
+        }
+
+        .btn-login:disabled {
+            opacity: 0.7;
+            transform: none;
+            cursor: not-allowed;
+        }
+
+        .attempt-badge {
+            font-size: 0.8rem;
+            padding: 0.35rem 0.75rem;
+        }
+
+        .input-group-text {
+            background-color: #f8f9fa;
+            border-right: none;
+        }
+
+        .input-group .form-control {
+            border-left: none;
+        }
+
+        @keyframes shake {
+
+            0%,
+            100% {
+                transform: translateX(0);
+            }
+
+            10%,
+            30%,
+            50%,
+            70%,
+            90% {
+                transform: translateX(-5px);
+            }
+
+            20%,
+            40%,
+            60%,
+            80% {
+                transform: translateX(5px);
+            }
+        }
+
+        .shake {
+            animation: shake 0.5s ease-in-out;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="container d-flex justify-content-center align-items-center">
+        <div class="card login-card">
+
+            <!-- LOGIN HEADER -->
+            <div class="login-header">
+                <h3 class="fw-bold"><i class="bi bi-box-seam"></i> ShopSphere</h3>
+                <p>Member Login</p>
+            </div>
+
+            <!-- CARD BODY -->
+            <div class="card-body px-4 pb-4">
+
+                <!-- DEMO TIP ALERT -->
+                <div class="alert alert-warning alert-dismissible fade show py-2 px-3" role="alert"
+                    style="font-size: 0.85rem;">
+                    <strong><i class="bi bi-key-fill"></i> Demo Tip:</strong> Try brute forcing username
+                    <code>admin</code> with random passwords like <code>pass1</code>, <code>pass2</code>,
+                    <code>pass3</code>, etc. Watch the security dashboard detect the attack pattern!
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"
+                        style="font-size: 0.65rem;"></button>
+                </div>
+
+                <!-- LOGIN FORM -->
+                <form id="loginForm" novalidate>
+                    <div class="mb-3">
+                        <label for="username" class="form-label fw-semibold">Username</label>
+                        <div class="input-group">
+                            <span class="input-group-text"><i class="bi bi-person-fill text-muted"></i></span>
+                            <input type="text" class="form-control" id="username" placeholder="Enter your username"
+                                required autocomplete="username">
+                        </div>
+                    </div>
+
+                    <div class="mb-4">
+                        <label for="password" class="form-label fw-semibold">Password</label>
+                        <div class="input-group">
+                            <span class="input-group-text"><i class="bi bi-lock-fill text-muted"></i></span>
+                            <input type="password" class="form-control" id="password" placeholder="Enter your password"
+                                required autocomplete="current-password">
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <button type="submit" class="btn btn-login" id="submitBtn">
+                            <i class="bi bi-box-arrow-in-right"></i> Sign In
+                        </button>
+                    </div>
+
+                    <div id="message" class="text-center mb-2"></div>
+
+                    <div id="attemptCounter" class="text-center"></div>
+                </form>
+
+            </div>
+
+            <!-- CARD FOOTER -->
+            <div class="card-footer text-center bg-light border-top py-3">
+                <a href="index.html" class="text-decoration-none text-muted">
+                    <i class="bi bi-arrow-left"></i> Back to Store
+                </a>
+                <span class="text-muted mx-2">|</span>
+                <a href="#" class="text-decoration-none text-muted">Forgot Password?</a>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- SCRIPTS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        var attemptCount = 0;
+
+        document.getElementById('loginForm').addEventListener('submit', function (e) {
+            e.preventDefault();
+
+            var username = document.getElementById('username').value.trim();
+            var password = document.getElementById('password').value;
+            var messageDiv = document.getElementById('message');
+            var counterDiv = document.getElementById('attemptCounter');
+            var submitBtn = document.getElementById('submitBtn');
+            var loginCard = document.querySelector('.login-card');
+
+            // Client-side validation
+            if (!username || !password) {
+                messageDiv.innerHTML = '<div class="alert alert-warning py-2 px-3" style="font-size: 0.9rem;">' +
+                    '<i class="bi bi-exclamation-triangle"></i> Please fill in all fields.</div>';
+                return;
+            }
+
+            // Increment attempt counter
+            attemptCount++;
+            counterDiv.innerHTML = '<span class="badge bg-secondary attempt-badge">' +
+                '<i class="bi bi-arrow-repeat"></i> Login attempt #' + attemptCount + '</span>';
+
+            // Show loading state
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>Authenticating...';
+            messageDiv.innerHTML = '';
+
+            // Make authentication request
+            fetch('/auth/login', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    username: username,
+                    password: password
+                })
+            })
+                .then(function (response) {
+                    return response.json();
+                })
+                .then(function (data) {
+                    // Re-enable button
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = '<i class="bi bi-box-arrow-in-right"></i> Sign In';
+
+                    if (data.status === 'success') {
+                        // SUCCESS
+                        messageDiv.innerHTML = '<div class="alert alert-success py-2 px-3" style="font-size: 0.9rem;">' +
+                            '<i class="bi bi-check-circle-fill"></i> Login Successful! Redirecting...</div>';
+
+                        // Remove shake class if present
+                        loginCard.classList.remove('shake');
+
+                        // Redirect after delay
+                        setTimeout(function () {
+                            window.location.href = 'index.html';
+                        }, 1500);
+
+                    } else {
+                        // FAILURE
+                        var errorMessage = data.message || 'Invalid credentials';
+                        messageDiv.innerHTML = '<div class="alert alert-danger py-2 px-3" style="font-size: 0.9rem;">' +
+                            '<i class="bi bi-x-circle-fill"></i> ' + errorMessage + '</div>';
+
+                        // Shake animation
+                        loginCard.classList.remove('shake');
+                        void loginCard.offsetWidth; // Force reflow to restart animation
+                        loginCard.classList.add('shake');
+
+                        // Clear password field for next attempt
+                        document.getElementById('password').value = '';
+                        document.getElementById('password').focus();
+                    }
+                })
+                .catch(function (error) {
+                    console.error('Auth error:', error);
+
+                    // Re-enable button
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = '<i class="bi bi-box-arrow-in-right"></i> Sign In';
+
+                    messageDiv.innerHTML = '<div class="alert alert-danger py-2 px-3" style="font-size: 0.9rem;">' +
+                        '<i class="bi bi-wifi-off"></i> Connection failed. Auth service may be down.' +
+                        '<br><small class="text-muted">' + error.message + '</small></div>';
+                });
+        });
+
+        // Allow Enter key to submit
+        document.getElementById('password').addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                document.getElementById('loginForm').dispatchEvent(new Event('submit'));
+            }
+        });
+
+        // Auto-focus username field on page load
+        document.addEventListener('DOMContentLoaded', function () {
+            document.getElementById('username').focus();
+        });
+    </script>
+
+</body>
+
+</html>
